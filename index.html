@@ -1,0 +1,399 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alliance Cheat Tools</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="site-shell">
+    <header class="site-header">
+      <nav class="top-nav" aria-label="Main navigation">
+        <a href="#home" class="nav-brand" aria-label="Go to Home" data-view-link="home">
+          <img src="css/Alliancelogonavbar.png" alt="Alliance Cheat Tools" class="nav-brand-logo" />
+        </a>
+
+        <div class="nav-links">
+          <a href="#home" class="nav-btn active" data-view-link="home">Home</a>
+          <a href="#missing-sales" class="nav-btn" data-view-link="missing-sales">Missing Sales Tools</a>
+          <a href="#csv-tools" class="nav-btn" data-view-link="csv-tools">Sales Validator</a>
+          <a href="#xml-tools" class="nav-btn" data-view-link="xml-tools">XML Tools</a>
+          <a href="#report-maker" class="nav-btn" data-view-link="report-maker">Report Maker</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="app-main">
+      <section class="view active" data-view="home">
+        <div class="home-logo">
+          <section class="home-copy">
+            <h1>Alliance Cheat Tools</h1>
+            <p>
+              Alliance Cheat Tools helps you complete tasks faster, including missing sales checks, validation workflows, and other technical support operations.
+            </p>
+            <p><strong>Note:</strong> This tool is for Technical Support use only.</p>
+            <p class="credit">Created by Angelo, the strongest in Alliance.</p>
+          </section>
+
+          <img
+            src="css/Alliancecheatlogo.png"
+            alt="Alliance Cheat Tools Logo"
+            class="home-logo-image"
+          />
+        </div>
+      </section>
+
+      <section class="view tool-view" data-view="missing-sales">
+        <div class="tool-card">
+          <h2>Missing Sales Tools</h2>
+          <div class="feature-actions">
+            <button type="button" class="feature-btn" id="checkMissingOrBtn">Check Missing OR#</button>
+            <button type="button" class="feature-btn" id="openGenerateFrecnoBtn">Generate the latest Frecno</button>
+            <button type="button" class="feature-btn" id="openFrecnoListSqlBtn">Frecno Filter SQL</button>
+            <button type="button" class="feature-btn" id="openGenerateAllScriptBtn">Generate All Script</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="view tool-view" data-view="csv-tools">
+        <div class="tool-card">
+          <h2>Sales Validator</h2>
+          <div class="feature-actions">
+            <button type="button" class="feature-btn" id="openAyalaCheckerBtn">Ayala</button>
+          </div>
+
+
+        </div>
+      </section>
+
+      <section class="view tool-view" data-view="xml-tools">
+        <div class="tool-card">
+          <h2>XML Tools</h2>
+          <div class="feature-actions">
+            <button type="button" class="feature-btn" id="openXmlRenameBtn">XML File Rename</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="view tool-view" data-view="report-maker">
+        <div class="tool-card">
+          <h2>Report Maker</h2>
+          <div class="feature-actions">
+            <button type="button" class="feature-btn" id="openReportDocxBtn">DOCX</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="transition-splash" aria-hidden="true">
+      <span class="transition-splash-text" id="transitionSplashText">HOME</span>
+    </div>
+
+    <div class="modal-overlay" id="missingOrModal" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>Check Missing OR#</h3>
+          <button type="button" class="modal-close-btn" id="closeMissingOrModal" aria-label="Close">x</button>
+        </div>
+        <div class="missing-or-layout">
+          <section class="missing-or-panel">
+            <p class="feature-note">Upload a file and the detector will read Receipt# values only (in row order).</p>
+            <input type="file" id="orFileInput" class="feature-file-input" accept=".txt,.csv,.log,.sql,.xlsx" />
+            <div class="file-actions">
+              <button type="button" class="feature-btn upload-btn" id="uploadOrFileBtn">Upload</button>
+              <button type="button" class="feature-btn clear-btn" id="clearOrFileBtn">Clear</button>
+            </div>
+            <p class="analyze-status" id="analyzeStatus" hidden>Analyzing file, please wait...</p>
+
+            <div class="missing-summary" id="missingSummary" hidden>
+              <p><strong>Total detected OR#:</strong> <span id="detectedCount">0</span></p>
+              <p><strong>Total missing OR# (jumps):</strong> <span id="missingCount">0</span></p>
+              <p><strong>Duplicate OR# rows:</strong> <span id="duplicateCount">0</span></p>
+              <p><strong>Roll back OR# rows:</strong> <span id="rollbackCount">0</span></p>
+              <p><strong>Out-of-order rows:</strong> <span id="outOfOrderCount">0</span></p>
+              <p><strong>Results:</strong></p>
+              <textarea id="missingListOutput" class="sql-output" readonly></textarea>
+            </div>
+          </section>
+
+          <section class="missing-or-panel">
+            <div class="sql-actions" id="sqlActions" hidden>
+              <button type="button" class="feature-btn" id="generateSelectSqlBtn">Generate SELECT SQL</button>
+              <button type="button" class="feature-btn" id="generateDeleteSqlBtn">Generate DELETE SQL</button>
+            </div>
+            <div class="copy-code-row" id="copyMissingSqlRow" hidden>
+              <button type="button" class="copy-code-btn" id="copyMissingSqlBtn">Copy code</button>
+            </div>
+            <textarea id="sqlResultOutput" class="sql-output" readonly hidden></textarea>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="frecnoModal" hidden>
+      <div class="modal-card modal-card--wide">
+        <div class="modal-head">
+          <h3>Generate Latest Frecno</h3>
+          <button type="button" class="modal-close-btn" id="closeFrecnoModal" aria-label="Close">x</button>
+        </div>
+        <p class="feature-note">Enter your old and latest frecno. Output will be generated on the right.</p>
+
+        <div class="frecno-layout">
+          <section class="frecno-controls">
+            <label class="frecno-label" for="latestFrecnoInput">Latest Frecno</label>
+            <input type="text" inputmode="numeric" id="latestFrecnoInput" class="feature-file-input" placeholder="e.g. 1080" />
+
+            <label class="frecno-label" for="oldFrecnoInput">Old Frecno</label>
+            <textarea id="oldFrecnoInput" class="feature-file-input old-frecno-input" placeholder="e.g. 1000"></textarea>
+
+            <div class="frecno-actions">
+              <button type="button" class="feature-btn upload-btn" id="generateFrecnoBtn">Generate</button>
+              <button type="button" class="feature-btn clear-btn" id="clearFrecnoBtn">Clear</button>
+            </div>
+          </section>
+
+          <section class="frecno-output-wrap">
+            <p class="feature-note" id="frecnoStatus">Generated output will appear here.</p>
+            <p class="feature-note frecno-progress" id="frecnoProgress" hidden>Analyzing...</p>
+            <div class="copy-code-row" id="copyFrecnoCodeRow" hidden>
+              <button type="button" class="copy-code-btn" id="copyFrecnoCodeBtn">Copy code</button>
+            </div>
+            <textarea id="frecnoOutput" class="sql-output frecno-output" readonly></textarea>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="allScriptModal" hidden>
+      <div class="modal-card modal-card--wide">
+        <div class="modal-head">
+          <h3>Generate All Script</h3>
+          <button type="button" class="modal-close-btn" id="closeAllScriptModal" aria-label="Close">x</button>
+        </div>
+        <p class="feature-note">Organized reference scripts with highlighted titles.</p>
+        <div class="copy-code-row">
+          <button type="button" class="copy-code-btn" id="copyAllScriptBtn">Copy code</button>
+        </div>
+        <div id="allScriptOutput" class="result-output all-script-output"></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="frecnoListSqlModal" hidden>
+      <div class="modal-card modal-card--wide">
+        <div class="modal-head">
+          <h3>Frecno Filter SQL</h3>
+          <button type="button" class="modal-close-btn" id="closeFrecnoListSqlModal" aria-label="Close">x</button>
+        </div>
+        <p class="feature-note">Input frecno numbers (one per line preferred; comma/space also accepted), then generate SELECT or DELETE SQL.</p>
+        <div class="missing-or-layout">
+          <section class="missing-or-panel">
+            <label class="frecno-label" for="frecnoListSqlInput">Frecno List</label>
+            <textarea id="frecnoListSqlInput" class="feature-file-input old-frecno-input" placeholder="e.g.&#10;81342&#10;81343&#10;81344"></textarea>
+            <div class="file-actions">
+              <button type="button" class="feature-btn upload-btn" id="generateFrecnoListSelectBtn">Generate SELECT SQL</button>
+              <button type="button" class="feature-btn" id="generateFrecnoListDeleteBtn">Generate DELETE SQL</button>
+              <button type="button" class="feature-btn clear-btn" id="clearFrecnoListSqlBtn">Clear</button>
+            </div>
+            <p class="analyze-status" id="frecnoListSqlStatus" hidden>Ready.</p>
+          </section>
+          <section class="missing-or-panel">
+            <div class="copy-code-row" id="copyFrecnoListSqlRow" hidden>
+              <button type="button" class="copy-code-btn" id="copyFrecnoListSqlBtn">Copy code</button>
+            </div>
+            <textarea id="frecnoListSqlOutput" class="sql-output" readonly></textarea>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="xmlRenameModal" hidden>
+      <div class="modal-card modal-card--wide">
+        <div class="modal-head">
+          <h3>XML File Rename</h3>
+          <button type="button" class="modal-close-btn" id="closeXmlRenameModal" aria-label="Close">x</button>
+        </div>
+        <p class="feature-note">Choose XML files, set Tenant ID and Key, then process to update tags and download renamed files.</p>
+        <div class="missing-or-layout">
+          <section class="missing-or-panel">
+            <label class="frecno-label" for="xmlRenameFileInput">Choose XML Files</label>
+            <input type="file" id="xmlRenameFileInput" class="feature-file-input" accept=".xml,text/xml" multiple />
+
+            <label class="frecno-label" for="xmlTenantIdInput">Tenant ID</label>
+            <input type="text" id="xmlTenantIdInput" class="feature-file-input" placeholder="e.g. 25021984" />
+
+            <label class="frecno-label" for="xmlKeyInput">Key</label>
+            <input type="text" id="xmlKeyInput" class="feature-file-input" placeholder="e.g. 12345" />
+
+            <div class="file-actions">
+              <button type="button" class="feature-btn upload-btn" id="processXmlRenameBtn">Process</button>
+              <button type="button" class="feature-btn clear-btn" id="clearXmlRenameBtn">Clear</button>
+            </div>
+            <p class="analyze-status" id="xmlRenameStatus" hidden>Ready.</p>
+          </section>
+
+          <section class="missing-or-panel">
+            <p class="frecno-label">Result</p>
+            <textarea id="xmlRenameOutput" class="sql-output" readonly></textarea>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="reportDocxModal" hidden>
+      <div class="modal-card modal-card--wide">
+        <div class="modal-head">
+          <h3>Report Maker - DOCX</h3>
+          <button type="button" class="modal-close-btn" id="closeReportDocxModal" aria-label="Close">x</button>
+        </div>
+        <p class="feature-note">Fill in the report details then click Generate DOCX.</p>
+        <div class="missing-or-layout">
+          <section class="missing-or-panel">
+            <label class="frecno-label" for="reportDocxTemplateInput">DOCX Template</label>
+            <input type="file" id="reportDocxTemplateInput" class="feature-file-input" accept=".docx" />
+
+            <div class="file-actions">
+              <button type="button" class="feature-btn" id="downloadReportTemplateBtn">Download Template</button>
+            </div>
+
+            <label class="frecno-label" for="reportDateInput">Date</label>
+            <input type="date" id="reportDateInput" class="feature-file-input" />
+
+            <label class="frecno-label" for="reportJofInput">JOF #</label>
+            <input type="text" id="reportJofInput" class="feature-file-input" placeholder="e.g. 35343" />
+
+            <label class="frecno-label" for="reportInvoiceInput">Invoice No.</label>
+            <input type="text" id="reportInvoiceInput" class="feature-file-input" placeholder="e.g. 00001" />
+
+            <label class="frecno-label" for="reportClientInput">Client Name</label>
+            <input type="text" id="reportClientInput" class="feature-file-input" placeholder="e.g. Treats Non Vat" />
+
+            <label class="frecno-label" for="reportTsAssignedInput">TS Assigned</label>
+            <input type="text" id="reportTsAssignedInput" class="feature-file-input" placeholder="" />
+
+            <label class="frecno-label" for="reportTitleInput">Report Title</label>
+            <input type="text" id="reportTitleInput" class="feature-file-input" placeholder="e.g. Status Report" />
+
+            <label class="frecno-label" for="reportConcernInput">Concern/s</label>
+            <textarea id="reportConcernInput" class="sql-output" placeholder="Concern line">Ticket no. </textarea>
+
+            <label class="frecno-label" for="reportRootCauseInput">Root Cause</label>
+            <textarea id="reportRootCauseInput" class="sql-output" placeholder="Root cause details"></textarea>
+
+            <label class="frecno-label" for="reportPreventiveInput">Preventive Action</label>
+            <textarea id="reportPreventiveInput" class="sql-output" placeholder="Preventive action details"></textarea>
+
+            <label class="frecno-label" for="reportNextStepsInput">Next Steps</label>
+            <textarea id="reportNextStepsInput" class="sql-output" placeholder="Next steps"></textarea>
+
+            <label class="frecno-label" for="reportCurrentStatusInput">Current Status</label>
+            <textarea id="reportCurrentStatusInput" class="sql-output" placeholder="Current status"></textarea>
+
+            <div class="file-actions">
+              <button type="button" class="feature-btn upload-btn" id="generateReportDocxBtn">Generate DOCX</button>
+              <button type="button" class="feature-btn clear-btn" id="clearReportDocxBtn">Clear</button>
+            </div>
+            <p class="analyze-status" id="reportDocxStatus" hidden>Ready.</p>
+          </section>
+          <section class="missing-or-panel">
+            <div class="file-actions">
+              <button type="button" class="feature-btn" id="openActivitiesEditorBtn">Activities of TS</button>
+            </div>
+            <p class="feature-note" id="activitiesEditorState">Click the button to input Activities of TS.</p>
+            <p class="frecno-label">Output Log</p>
+            <textarea id="reportDocxOutput" class="sql-output" readonly></textarea>
+          </section>
+        </div>
+        <div class="activities-editor-dialog" id="activitiesEditorDialog" hidden>
+          <div class="activities-editor-card">
+            <div class="modal-head">
+              <h3>Activities of TS</h3>
+              <button type="button" class="modal-close-btn" id="closeActivitiesEditorBtn" aria-label="Close">x</button>
+            </div>
+            <div class="editor-toolbar" aria-label="Activities formatting tools">
+              <button type="button" class="feature-btn editor-tool-btn" id="activitiesBulletBtn">Bullet List</button>
+            </div>
+            <div id="reportActivitiesEditor" class="rich-activities-editor rich-activities-editor--large" contenteditable="true" aria-label="Activities of TS editor"></div>
+            <div class="file-actions">
+              <button type="button" class="feature-btn upload-btn" id="okActivitiesEditorBtn">OK</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="ayalaModal" hidden>
+      <div class="modal-card modal-card--ayala">
+        <div class="modal-head">
+          <h3>Ayala Tools</h3>
+          <button type="button" class="modal-close-btn" id="closeAyalaModal" aria-label="Close">x</button>
+        </div>
+
+        <div class="ayala-tab-row">
+          <button type="button" class="ayala-tab-btn active" id="ayalaCheckerTabBtn">Ayala Checker</button>
+          <button type="button" class="ayala-tab-btn" id="ayalaGuidelinesTabBtn">Ayala Guidelines</button>
+        </div>
+
+        <div id="ayalaGuidelinesPanel" class="ayala-panel" hidden>
+          <p class="feature-note">Ayala Guidelines</p>
+          <div class="ayala-upload-card">
+            <p class="feature-note">1. Prepare CSV Hourly and EOD files before upload.</p>
+            <p class="feature-note">2. Ensure file columns and order match the required format.</p>
+            <p class="feature-note">3. Review the checker result before finalizing.</p>
+          </div>
+        </div>
+
+        <div id="ayalaCheckerPanel" class="ayala-panel">
+          <p class="feature-note">Upload CSV hourly and EOD files.</p>
+
+          <div class="ayala-upload-grid">
+            <div class="ayala-upload-card">
+              <p class="frecno-label">CSV Hourly Files</p>
+              <input type="file" id="hourlyCsvInput" class="feature-file-input" accept=".csv" multiple />
+            </div>
+
+            <div class="ayala-upload-card">
+              <p class="frecno-label">EOD Files</p>
+              <input type="file" id="eodCsvInput" class="feature-file-input" accept=".csv,.txt,.xlsx" multiple />
+            </div>
+          </div>
+
+          <div class="file-actions">
+            <button type="button" class="feature-btn" id="mergeAyalaBtn">Merge</button>
+            <button type="button" class="feature-btn upload-btn" id="uploadAyalaBtn">Upload</button>
+            <button type="button" class="feature-btn clear-btn" id="clearAyalaBtn">Clear</button>
+          </div>
+
+          <p class="analyze-status" id="ayalaStatus" hidden>Ready.</p>
+          <div class="file-actions" id="ayalaDiscrepancyActions" hidden>
+            <button type="button" class="feature-btn" id="ayalaTxnDiscrepancyBtn">Transaction Validation Result</button>
+            <button type="button" class="feature-btn" id="ayalaTotalDiscrepancyBtn">Hourly vs EOD Validation Result</button>
+          </div>
+          <div class="copy-code-row" id="copyAyalaReportRow" hidden>
+            <button type="button" class="copy-code-btn" id="copyAyalaReportBtn">Copy report</button>
+            <button type="button" class="copy-code-btn" id="downloadAyalaCheckerBtn">Download XLSX</button>
+          </div>
+          <textarea id="ayalaReportOutput" class="sql-output" readonly hidden></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="ayalaResultModal" hidden>
+      <div class="modal-card modal-card--wide">
+        <div class="modal-head">
+          <h3>Ayala Validation Result</h3>
+          <button type="button" class="modal-close-btn" id="closeAyalaResultModal" aria-label="Close">x</button>
+        </div>
+        <pre id="ayalaResultText" class="result-output"></pre>
+        <div class="file-actions">
+          <button type="button" class="feature-btn upload-btn" id="okAyalaResultBtn">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="js/script.js"></script>
+</body>
+</html>
