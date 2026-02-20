@@ -986,6 +986,29 @@
     return primary;
   }
 
+  const AYALA_PRODUCT_LINE_FIELDS = new Set(['QTY', 'ITEMCODE', 'PRICE', 'LDISC']);
+
+  function getAyalaRawFieldValues(record, field) {
+    if (!record) {
+      return [];
+    }
+    const key = String(field || '').trim();
+    const multiLine = record.__multiLineFields;
+    if (multiLine && typeof multiLine === 'object' && Array.isArray(multiLine[key]) && multiLine[key].length > 0) {
+      return multiLine[key];
+    }
+    if (key === 'OTHERSL_SLS') {
+      const primary = record.OTHERSL_SLS ?? record.OTHER_SLS ?? '';
+      return primary === '' ? [] : [primary];
+    }
+    if (key === 'OTHER_SLS') {
+      const primary = record.OTHER_SLS ?? record.OTHERSL_SLS ?? '';
+      return primary === '' ? [] : [primary];
+    }
+    const primary = record[key];
+    return (primary === undefined || primary === null || String(primary) === '') ? [] : [primary];
+  }
+
   function getAyalaRawFieldValue(record, field) {
     if (!record) {
       return '';
@@ -1148,6 +1171,27 @@
       const globalFields = {};
       const records = [];
       let current = {};
+      const appendProductLineValue = (target, key, value) => {
+        if (!AYALA_PRODUCT_LINE_FIELDS.has(key)) {
+          return;
+        }
+        if (!target.__multiLineFields || typeof target.__multiLineFields !== 'object') {
+          target.__multiLineFields = {};
+        }
+        if (!Array.isArray(target.__multiLineFields[key])) {
+          target.__multiLineFields[key] = [];
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(target, key)
+          && String(target[key] ?? '').trim() !== ''
+          && target.__multiLineFields[key].length === 0
+        ) {
+          target.__multiLineFields[key].push(String(target[key]).trim());
+        }
+        if (value !== '') {
+          target.__multiLineFields[key].push(value);
+        }
+      };
       kvRows.forEach(({ key, values }) => {
         const value = String(values[0] ?? '').trim();
         const isGlobalKey = key === 'CCCODE' || key === 'MERCHANT_NAME' || key === 'TRN_DATE';
@@ -1158,6 +1202,7 @@
           records.push(current);
           current = { ...globalFields };
         }
+        appendProductLineValue(current, key, value);
         current[key] = value;
       });
       if (Object.keys(current).length > 0) {
@@ -1165,7 +1210,9 @@
       }
       const allHeaders = new Set();
       records.forEach((record) => {
-        Object.keys(record).forEach((header) => allHeaders.add(header));
+        Object.keys(record)
+          .filter((header) => !String(header || '').startsWith('__'))
+          .forEach((header) => allHeaders.add(header));
       });
       return {
         headers: Array.from(allHeaders),
@@ -1535,6 +1582,30 @@
   }
 
   function validateAyalaData(hourlyRecords, eodRecords) {
+    const isZeroLikeTxnRef = (value) => {
+      const text = String(value || '').trim();
+      if (!text) {
+        return true;
+      }
+      const parsed = Number.parseInt(text.replace(/,/g, ''), 10);
+      return Number.isFinite(parsed) && parsed === 0;
+    };
+    const shouldIgnoreMissingHourlyGroup = (eodRecord) => {
+      if (!eodRecord || typeof eodRecord !== 'object') {
+        return false;
+      }
+      const noTrn = Number.parseInt(String(eodRecord.NO_TRN || '').replace(/,/g, ''), 10);
+      const gross = parseNumericAyala(eodRecord.GROSS_SLS);
+      const epay = parseNumericAyala(eodRecord.EPAY_SLS);
+      const refund = parseNumericAyala(eodRecord.REFUND_AMT);
+      return Number.isFinite(noTrn)
+        && noTrn === 0
+        && Math.abs(gross) <= AYALA_DISCREPANCY_TOLERANCE
+        && Math.abs(epay) <= AYALA_DISCREPANCY_TOLERANCE
+        && Math.abs(refund) <= AYALA_DISCREPANCY_TOLERANCE
+        && isZeroLikeTxnRef(eodRecord.STRANS)
+        && isZeroLikeTxnRef(eodRecord.ETRANS);
+    };
     const duplicateSensitiveFields = [
       'GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'NONVAT_SLS', 'VATEXEMPT_SLS', 'VATEXEMPT_AMNT',
       'LOCAL_TAX', 'PWD_DISC', 'SNRCIT_DISC', 'EMPLO_DISC', 'AYALA_DISC', 'STORE_DISC', 'OTHER_DISC',
@@ -1942,8 +2013,11 @@
       }
     });
 
-    eodMap.forEach((_, key) => {
+    eodMap.forEach((eodRecord, key) => {
       if (!hourlyGroups.has(key)) {
+        if (shouldIgnoreMissingHourlyGroup(eodRecord)) {
+          return;
+        }
         missingInHourly.push(key);
       }
     });
@@ -2701,6 +2775,36 @@
     return value;
   }
 
+  function getAyalaRawMultiLineFieldValue(records, field) {
+    const list = Array.isArray(records) ? records : [];
+    if (list.length === 0) {
+      return '';
+    }
+    const values = list
+      .flatMap((record) => getAyalaRawFieldValues(record, field))
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => value !== '');
+    if (values.length === 0) {
+      return '';
+    }
+    return values.join('\n');
+  }
+
+  function getAyalaRawInlineFieldValue(records, field) {
+    const list = Array.isArray(records) ? records : [];
+    if (list.length === 0) {
+      return '';
+    }
+    const values = list
+      .flatMap((record) => getAyalaRawFieldValues(record, field))
+      .map((value) => String(value ?? '').trim())
+      .filter((value) => value !== '');
+    if (values.length === 0) {
+      return '';
+    }
+    return values.join(' | ');
+  }
+
   function buildAyalaHourlyMergeTable(hourlyRecords) {
     const orderedFields = [
       'CCCODE', 'MERCHANT_NAME', 'TRN_DATE', 'NO_TRN', 'CDATE', 'TRN_TIME', 'TER_NO', 'TRANSACTION_NO',
@@ -2731,10 +2835,15 @@
     const sumEndIndex = orderedFields.indexOf('LDISC');
 
     const txnMap = new Map();
+    const txnRowsMap = new Map();
     normalizedRows.forEach((row) => {
       if (!row.txn || !row.key || row.key === '|') {
         return;
       }
+      if (!txnRowsMap.has(row.key)) {
+        txnRowsMap.set(row.key, []);
+      }
+      txnRowsMap.get(row.key).push(row.record);
       if (txnMap.has(row.key)) {
         return;
       }
@@ -2778,10 +2887,12 @@
     const lines = [];
 
     orderedFields.forEach((field, fieldIndex) => {
+      const isProductRawField = field === 'QTY' || field === 'ITEMCODE' || field === 'PRICE' || field === 'LDISC';
       const shouldSum = sumStartIndex >= 0
         && sumEndIndex >= 0
         && fieldIndex >= sumStartIndex
-        && fieldIndex <= sumEndIndex;
+        && fieldIndex <= sumEndIndex
+        && !isProductRawField;
       const values = horizontalTxns.map((txn) => {
         const record = txnMap.get(txn);
         if (!record) {
@@ -2802,9 +2913,20 @@
           }
           return '';
         }
+        if (isProductRawField) {
+          const txnRows = txnRowsMap.get(txn) || [];
+          return getAyalaRawMultiLineFieldValue(txnRows, field);
+        }
         return formatMergeDisplayValue(field, getAyalaRawFieldValue(record, field));
       });
-      const numericValues = values.map((value) => parseNumericAyala(value));
+      const numericValues = values.map((value) => {
+        if (!isProductRawField) {
+          return parseNumericAyala(value);
+        }
+        return String(value || '')
+          .split(/\r?\n/)
+          .reduce((acc, item) => acc + parseNumericAyala(item), 0);
+      });
       const sum = shouldSum
         ? formatAyalaAmount(numericValues.reduce((acc, n) => acc + n, 0))
         : '';
@@ -2978,6 +3100,8 @@
       'TRN_TYPE', 'SLS_FLAG', 'VAT_PCT', 'QTY_SLD', 'QTY', 'ITEMCODE', 'PRICE', 'LDISC',
     ];
     const firstOnlyFields = new Set(['CCCODE', 'MERCHANT_NAME', 'TRN_DATE']);
+    const productRawFields = new Set(['QTY', 'ITEMCODE', 'PRICE', 'LDISC']);
+    const productFieldOrder = ['QTY', 'ITEMCODE', 'PRICE', 'LDISC'];
     const sumStartIndex = orderedFields.indexOf('GROSS_SLS');
     const sumEndIndex = orderedFields.indexOf('LDISC');
 
@@ -3004,11 +3128,47 @@
       }));
 
     const txnMap = new Map();
+    const txnRowsMap = new Map();
     normalizedRows.forEach((row) => {
       if (!txnMap.has(row.key)) {
         txnMap.set(row.key, row.record);
       }
+      if (!row.key || row.key === '|') {
+        return;
+      }
+      if (!txnRowsMap.has(row.key)) {
+        txnRowsMap.set(row.key, []);
+      }
+      txnRowsMap.get(row.key).push(row.record);
     });
+    const getTxnProductLineValue = (txnKey, field, lineIndex = 0) => {
+      const txnRows = txnRowsMap.get(txnKey) || [];
+      const values = txnRows
+        .flatMap((record) => getAyalaRawFieldValues(record, field))
+        .map((value) => String(value ?? '').trim())
+        .filter((value) => value !== '');
+      const raw = values[lineIndex] || '';
+      if (!raw) {
+        return '';
+      }
+      return formatMergeDisplayValue(field, raw);
+    };
+    const maxProductLineCount = Math.max(
+      1,
+      ...Array.from(txnRowsMap.keys()).map((txnKey) => {
+        return Math.max(
+          ...productFieldOrder.map((field) => {
+            const txnRows = txnRowsMap.get(txnKey) || [];
+            return txnRows
+              .flatMap((record) => getAyalaRawFieldValues(record, field))
+              .map((value) => String(value ?? '').trim())
+              .filter((value) => value !== '')
+              .length;
+          }),
+          1
+        );
+      })
+    );
 
     const firstTxnKeyByFile = new Map();
     const txnCountByFile = new Map();
@@ -3245,11 +3405,13 @@
     }
 
     const fieldRowMap = new Map();
+    const productLineRowMap = new Map();
     orderedFields.forEach((field, fieldIndex) => {
       const shouldSum = sumStartIndex >= 0
         && sumEndIndex >= 0
         && fieldIndex >= sumStartIndex
-        && fieldIndex <= sumEndIndex;
+        && fieldIndex <= sumEndIndex
+        && !productRawFields.has(field);
       const values = horizontalTxns.map((txn) => {
         if (movedTxnKeys.has(txn)) {
           return '';
@@ -3273,6 +3435,9 @@
           }
           return '';
         }
+        if (productRawFields.has(field)) {
+          return getTxnProductLineValue(txn, field, 0);
+        }
         return formatMergeDisplayValue(field, getAyalaRawFieldValue(record, field));
       });
 
@@ -3294,12 +3459,15 @@
       const eodValue = String(eodCombinedValues.get(eodField) ?? '');
 
       const rowIndex = aoa.length;
+      const displayFieldLabel = productRawFields.has(field) && maxProductLineCount > 1
+        ? `${field} (1)`
+        : field;
       const row = Array(eodFirstValueColIndex + 1).fill('');
-      row[0] = field;
+      row[0] = displayFieldLabel;
       sheetValues.forEach((value, idx) => {
         row[firstTxnColIndex + idx] = value;
       });
-      row[fieldCopyColIndex] = field;
+      row[fieldCopyColIndex] = displayFieldLabel;
       if (hasMultiHourlyTerminal) {
         hourlyTerminalOrder.forEach((terNo, terIdx) => {
           const terTotal = shouldSum
@@ -3323,6 +3491,9 @@
       row[eodFirstValueColIndex] = eodValue;
       aoa.push(row);
       fieldRowMap.set(field, rowIndex);
+      if (productRawFields.has(field)) {
+        productLineRowMap.set(`${field}#0`, rowIndex);
+      }
       formulaRows.push(shouldSum);
       if (compareHighlightFields.has(field)) {
         comparisonRows.push({
@@ -3333,8 +3504,35 @@
         });
       }
     });
+    if (maxProductLineCount > 1) {
+      for (let lineIdx = 1; lineIdx < maxProductLineCount; lineIdx += 1) {
+        productFieldOrder.forEach((field) => {
+          const values = horizontalTxns.map((txn) => {
+            if (movedTxnKeys.has(txn)) {
+              return '';
+            }
+            return getTxnProductLineValue(txn, field, lineIdx);
+          });
+          const displayFieldLabel = `${field} (${lineIdx + 1})`;
+          const row = Array(eodFirstValueColIndex + 1).fill('');
+          row[0] = displayFieldLabel;
+          values.forEach((value, idx) => {
+            row[firstTxnColIndex + idx] = String(value ?? '').trim();
+          });
+          row[fieldCopyColIndex] = displayFieldLabel;
+          row[sumColIndex] = '';
+          row[separatorColIndex] = '';
+          row[eodFieldColIndex] = '';
+          row[eodFirstValueColIndex] = '';
+          aoa.push(row);
+          productLineRowMap.set(`${field}#${lineIdx}`, aoa.length - 1);
+          formulaRows.push(false);
+        });
+      }
+    }
 
     const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+
     const rawRows = Array.isArray(eodGrid.rows) ? eodGrid.rows : [];
 
     // Refund pair columns (right side of EOD), aligned to same field rows like manual checker.
@@ -3366,15 +3564,36 @@
 
         const fillTxnColumn = (entry, col) => {
           orderedFields.forEach((field) => {
+            if (productRawFields.has(field)) {
+              const productValues = entry && entry.record
+                ? getAyalaRawFieldValues(entry.record, field)
+                  .map((value) => String(value ?? '').trim())
+                  .map((value) => (value ? formatMergeDisplayValue(field, value) : ''))
+                : [];
+              for (let lineIdx = 0; lineIdx < maxProductLineCount; lineIdx += 1) {
+                const row = productLineRowMap.get(`${field}#${lineIdx}`);
+                if (row === undefined) {
+                  continue;
+                }
+                const addr = XLSX.utils.encode_cell({ r: row, c: col });
+                worksheet[addr] = { t: 's', v: String(productValues[lineIdx] || '') };
+                refundMatrixMaxRow = Math.max(refundMatrixMaxRow, row);
+              }
+              return;
+            }
             if (!fieldRowMap.has(field)) {
               return;
             }
             const row = fieldRowMap.get(field);
             const addr = XLSX.utils.encode_cell({ r: row, c: col });
             const raw = entry && entry.record ? getAyalaRawFieldValue(entry.record, field) : '';
-            const display = String(raw ?? '');
-            // Keep moved pair columns as exact raw values from source rows.
-            worksheet[addr] = { t: 's', v: String(display ?? '') };
+            const display = formatMergeDisplayValue(field, raw);
+            const text = String(display ?? '').trim();
+            if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+              worksheet[addr] = { t: 'n', v: Number.parseFloat(text) };
+            } else {
+              worksheet[addr] = { t: 's', v: String(display ?? '') };
+            }
             refundMatrixMaxRow = Math.max(refundMatrixMaxRow, row);
           });
         };
@@ -3386,6 +3605,27 @@
         fillTxnColumn(refund, colRefund);
       });
     }
+
+    // Keep product line rows visually consistent with numeric rows.
+    const productRowIndexes = Array.from(new Set(Array.from(productLineRowMap.values())));
+    productRowIndexes.forEach((rowIndex) => {
+      for (let c = firstTxnColIndex; c <= refundMatrixEndCol; c += 1) {
+        const addr = XLSX.utils.encode_cell({ r: rowIndex, c });
+        if (!worksheet[addr]) {
+          continue;
+        }
+        const baseStyle = worksheet[addr].s || {};
+        const baseAlign = baseStyle.alignment || {};
+        worksheet[addr].s = {
+          ...baseStyle,
+          alignment: {
+            ...baseAlign,
+            horizontal: 'right',
+            vertical: 'center',
+          },
+        };
+      }
+    });
 
     // Write SUM formulas so users can inspect exact calculation in Excel.
     for (let r = 0; r < formulaRows.length; r += 1) {
