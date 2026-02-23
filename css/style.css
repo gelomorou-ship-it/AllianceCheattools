@@ -786,6 +786,30 @@ body.is-switching .transition-splash {
   min-height: 320px;
 }
 
+#frecnoListSqlModal .file-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, auto));
+  gap: 6px;
+  align-items: center;
+  justify-content: start;
+}
+
+#frecnoListSqlModal .file-actions .feature-btn {
+  width: 100%;
+  min-width: 96px;
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  line-height: 1.1;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+#frecnoListSqlModal #clearFrecnoListSqlBtn {
+  grid-column: 1 / span 2;
+  max-width: 180px;
+  justify-self: start;
+}
+
 @media (max-width: 1280px) {
   .modal-card--wide {
     width: min(980px, calc(100vw - 2 * clamp(8px, 1.2vw, 16px)));

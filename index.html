@@ -33,7 +33,7 @@
               Alliance Cheat Tools helps you complete tasks faster, including missing sales checks, validation workflows, and other technical support operations.
             </p>
             <p><strong>Note:</strong> This tool is for Technical Support use only.</p>
-            <p class="credit">Created by Angelo, the strongest in Alliance.</p>
+            <p class="credit">Created by Angelo Bukiron, the strongest in Alliance.</p>
           </section>
 
           <img
@@ -142,10 +142,10 @@
         <div class="frecno-layout">
           <section class="frecno-controls">
             <label class="frecno-label" for="latestFrecnoInput">Latest Frecno</label>
-            <input type="text" inputmode="numeric" id="latestFrecnoInput" class="feature-file-input" placeholder="e.g. 1080" />
+            <input type="text" inputmode="numeric" pattern="[0-9]*" id="latestFrecnoInput" class="feature-file-input" placeholder="e.g. 1080" />
 
             <label class="frecno-label" for="oldFrecnoInput">Old Frecno</label>
-            <textarea id="oldFrecnoInput" class="feature-file-input old-frecno-input" placeholder="e.g. 1000"></textarea>
+            <textarea id="oldFrecnoInput" inputmode="numeric" class="feature-file-input old-frecno-input" placeholder="e.g.&#10;1000&#10;1001"></textarea>
 
             <div class="frecno-actions">
               <button type="button" class="feature-btn upload-btn" id="generateFrecnoBtn">Generate</button>
@@ -185,14 +185,16 @@
           <h3>Frecno Filter SQL</h3>
           <button type="button" class="modal-close-btn" id="closeFrecnoListSqlModal" aria-label="Close">x</button>
         </div>
-        <p class="feature-note">Input frecno numbers (one per line preferred; comma/space also accepted), then generate SELECT or DELETE SQL.</p>
+        <p class="feature-note">Input frecno numbers only (one per line), then generate SELECT/DELETE using IN or NOT IN.</p>
         <div class="missing-or-layout">
           <section class="missing-or-panel">
             <label class="frecno-label" for="frecnoListSqlInput">Frecno List</label>
-            <textarea id="frecnoListSqlInput" class="feature-file-input old-frecno-input" placeholder="e.g.&#10;81342&#10;81343&#10;81344"></textarea>
+            <textarea id="frecnoListSqlInput" inputmode="numeric" class="feature-file-input old-frecno-input" placeholder="e.g.&#10;81342&#10;81343&#10;81344"></textarea>
             <div class="file-actions">
-              <button type="button" class="feature-btn upload-btn" id="generateFrecnoListSelectBtn">Generate SELECT SQL</button>
-              <button type="button" class="feature-btn" id="generateFrecnoListDeleteBtn">Generate DELETE SQL</button>
+              <button type="button" class="feature-btn upload-btn" id="generateFrecnoListSelectInBtn">Generate SELECT IN</button>
+              <button type="button" class="feature-btn" id="generateFrecnoListDeleteInBtn">Generate DELETE IN</button>
+              <button type="button" class="feature-btn" id="generateFrecnoListSelectNotInBtn">Generate SELECT NOT IN</button>
+              <button type="button" class="feature-btn" id="generateFrecnoListDeleteNotInBtn">Generate DELETE NOT IN</button>
               <button type="button" class="feature-btn clear-btn" id="clearFrecnoListSqlBtn">Clear</button>
             </div>
             <p class="analyze-status" id="frecnoListSqlStatus" hidden>Ready.</p>
@@ -267,7 +269,7 @@
 
             <label class="frecno-label" for="reportClientInput">Client Name</label>
             <input type="text" id="reportClientInput" class="feature-file-input" placeholder="e.g. Treats Non Vat" />
-
+            
             <label class="frecno-label" for="reportTsAssignedInput">TS Assigned</label>
             <input type="text" id="reportTsAssignedInput" class="feature-file-input" placeholder="" />
 

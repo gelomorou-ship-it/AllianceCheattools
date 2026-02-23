@@ -119,8 +119,10 @@
   const frecnoListSqlModal = document.getElementById('frecnoListSqlModal');
   const closeFrecnoListSqlModal = document.getElementById('closeFrecnoListSqlModal');
   const frecnoListSqlInput = document.getElementById('frecnoListSqlInput');
-  const generateFrecnoListSelectBtn = document.getElementById('generateFrecnoListSelectBtn');
-  const generateFrecnoListDeleteBtn = document.getElementById('generateFrecnoListDeleteBtn');
+  const generateFrecnoListSelectInBtn = document.getElementById('generateFrecnoListSelectInBtn');
+  const generateFrecnoListDeleteInBtn = document.getElementById('generateFrecnoListDeleteInBtn');
+  const generateFrecnoListSelectNotInBtn = document.getElementById('generateFrecnoListSelectNotInBtn');
+  const generateFrecnoListDeleteNotInBtn = document.getElementById('generateFrecnoListDeleteNotInBtn');
   const clearFrecnoListSqlBtn = document.getElementById('clearFrecnoListSqlBtn');
   const frecnoListSqlStatus = document.getElementById('frecnoListSqlStatus');
   const frecnoListSqlOutput = document.getElementById('frecnoListSqlOutput');
@@ -714,8 +716,8 @@
   }
 
   function formatSqlNumberList(numbers) {
-    const quoted = numbers.map((value) => `"${value}"`);
-    return chunkArray(quoted, 10).map((row) => row.join(',')).join('\n');
+    const quoted = numbers.map((value) => `'${value}'`);
+    return chunkArray(quoted, 10).map((row) => row.join(',')).join(',\n');
   }
 
   function isGrossHeaderCell(value) {
@@ -3459,15 +3461,12 @@
       const eodValue = String(eodCombinedValues.get(eodField) ?? '');
 
       const rowIndex = aoa.length;
-      const displayFieldLabel = productRawFields.has(field) && maxProductLineCount > 1
-        ? `${field} (1)`
-        : field;
       const row = Array(eodFirstValueColIndex + 1).fill('');
-      row[0] = displayFieldLabel;
+      row[0] = field;
       sheetValues.forEach((value, idx) => {
         row[firstTxnColIndex + idx] = value;
       });
-      row[fieldCopyColIndex] = displayFieldLabel;
+      row[fieldCopyColIndex] = field;
       if (hasMultiHourlyTerminal) {
         hourlyTerminalOrder.forEach((terNo, terIdx) => {
           const terTotal = shouldSum
@@ -3513,13 +3512,12 @@
             }
             return getTxnProductLineValue(txn, field, lineIdx);
           });
-          const displayFieldLabel = `${field} (${lineIdx + 1})`;
           const row = Array(eodFirstValueColIndex + 1).fill('');
-          row[0] = displayFieldLabel;
+          row[0] = field;
           values.forEach((value, idx) => {
             row[firstTxnColIndex + idx] = String(value ?? '').trim();
           });
-          row[fieldCopyColIndex] = displayFieldLabel;
+          row[fieldCopyColIndex] = field;
           row[sumColIndex] = '';
           row[separatorColIndex] = '';
           row[eodFieldColIndex] = '';
@@ -4351,7 +4349,7 @@
   }
 
   function extractUniqueFrecnos(rawText) {
-    const parsed = parseFrecnoList(rawText);
+    const parsed = parseStrictFrecnoLines(sanitizeOldFrecnoValue(rawText));
     if (parsed.length === 0) {
       return [];
     }
@@ -4389,11 +4387,41 @@
     }
     const listSql = formatFrecnoSqlList(values);
     return [
-      `DELETE from pos_sale where frecno not in (${listSql});`,
+      `DELETE FROM pos_sale WHERE frecno NOT IN (${listSql});`,
       '',
-      `DELETE from pos_sale_payment where frecno not in (${listSql});`,
+      `DELETE FROM pos_sale_payment WHERE frecno NOT IN (${listSql});`,
       '',
-      `DELETE from pos_sale_product where frecno not in (${listSql});`,
+      `DELETE FROM pos_sale_product WHERE frecno NOT IN (${listSql});`,
+    ].join('\n');
+  }
+
+  function buildDeleteInSqlFromFrecnoList(rawText) {
+    const values = extractUniqueFrecnos(rawText);
+    if (values.length === 0) {
+      return '-- Please enter at least one frecno value.';
+    }
+    const listSql = formatFrecnoSqlList(values);
+    return [
+      `DELETE FROM pos_sale WHERE frecno IN (${listSql});`,
+      '',
+      `DELETE FROM pos_sale_payment WHERE frecno IN (${listSql});`,
+      '',
+      `DELETE FROM pos_sale_product WHERE frecno IN (${listSql});`,
+    ].join('\n');
+  }
+
+  function buildSelectNotInSqlFromFrecnoList(rawText) {
+    const values = extractUniqueFrecnos(rawText);
+    if (values.length === 0) {
+      return '-- Please enter at least one frecno value.';
+    }
+    const listSql = formatFrecnoSqlList(values);
+    return [
+      `SELECT * FROM pos_sale WHERE frecno NOT IN (${listSql});`,
+      '',
+      `SELECT * FROM pos_sale_payment WHERE frecno NOT IN (${listSql});`,
+      '',
+      `SELECT * FROM pos_sale_product WHERE frecno NOT IN (${listSql});`,
     ].join('\n');
   }
 
@@ -4412,6 +4440,80 @@
     return /^\d+$/.test(String(value || '').trim());
   }
 
+  function sanitizeLatestFrecnoValue(value) {
+    return String(value || '').replace(/\D+/g, '');
+  }
+
+  function sanitizeOldFrecnoValue(value) {
+    const normalized = String(value || '').replace(/\r\n/g, '\n');
+    return normalized
+      .replace(/[^\d\n]+/g, '\n')
+      .replace(/\n{2,}/g, '\n');
+  }
+
+  function attachNumericGuard(target, { allowNewLine = false } = {}) {
+    if (!target) {
+      return;
+    }
+    const sanitize = (value) => {
+      const raw = String(value || '');
+      return allowNewLine ? raw.replace(/[^\d\n\r]+/g, '') : raw.replace(/\D+/g, '');
+    };
+
+    target.addEventListener('beforeinput', (event) => {
+      if (!event || event.isComposing) {
+        return;
+      }
+      const inputType = String(event.inputType || '');
+      if (inputType.startsWith('delete') || inputType === 'historyUndo' || inputType === 'historyRedo') {
+        return;
+      }
+      if (event.data == null) {
+        return;
+      }
+      const sanitized = sanitize(event.data);
+      if (sanitized === event.data) {
+        return;
+      }
+      event.preventDefault();
+    });
+
+    target.addEventListener('paste', (event) => {
+      const clipboardText = event && event.clipboardData
+        ? event.clipboardData.getData('text')
+        : '';
+      if (!clipboardText) {
+        return;
+      }
+      const sanitized = sanitize(clipboardText);
+      if (sanitized === clipboardText) {
+        return;
+      }
+      event.preventDefault();
+    });
+  }
+
+  function isEditableTarget(target) {
+    if (!target) return false;
+    if (target instanceof HTMLTextAreaElement) return !target.readOnly && !target.disabled;
+    if (target instanceof HTMLInputElement) {
+      const type = String(target.type || '').toLowerCase();
+      if (type === 'button' || type === 'submit' || type === 'reset' || type === 'file' || type === 'checkbox' || type === 'radio') {
+        return false;
+      }
+      return !target.readOnly && !target.disabled;
+    }
+    return Boolean(target.isContentEditable);
+  }
+
+  function parseStrictFrecnoLines(rawText) {
+    return String(rawText || '')
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /^\d+$/.test(line));
+  }
+
   async function buildFrecnoUpdateSql(oldFrecnos, latestStart) {
     const tables = ['pos_sale', 'pos_sale_payment', 'pos_sale_product'];
     const whenLines = [];
@@ -4420,7 +4522,7 @@
     for (let index = 0; index < oldFrecnos.length; index += 1) {
       const oldFrecno = oldFrecnos[index];
       const nextFrecno = latestStart + index;
-      whenLines.push(`    WHEN "${oldFrecno}" THEN "${nextFrecno}"`);
+      whenLines.push(`    WHEN '${oldFrecno}' THEN '${nextFrecno}'`);
 
       if (index > 0 && index % yieldEvery === 0) {
         if (frecnoProgress) {
@@ -6359,6 +6461,10 @@
     });
     reportActivitiesEditor.addEventListener('keydown', (event) => {
       const key = String(event.key || '').toLowerCase();
+      const isUndoRedo = (event.ctrlKey || event.metaKey) && (key === 'z' || key === 'y');
+      if (isUndoRedo) {
+        return;
+      }
       if (key !== 'backspace' && key !== 'delete') return;
       const selectedImg = reportActivitiesEditor.querySelector('img.activities-inline-image--selected');
       if (!selectedImg) return;
@@ -6594,8 +6700,11 @@
     });
   }
 
-  if (generateFrecnoListSelectBtn && frecnoListSqlOutput) {
-    generateFrecnoListSelectBtn.addEventListener('click', () => {
+  if (generateFrecnoListSelectInBtn && frecnoListSqlOutput) {
+    generateFrecnoListSelectInBtn.addEventListener('click', () => {
+      if (frecnoListSqlInput) {
+        frecnoListSqlInput.value = sanitizeOldFrecnoValue(frecnoListSqlInput.value);
+      }
       normalizeFrecnoInputToVertical();
       const rawText = frecnoListSqlInput ? frecnoListSqlInput.value : '';
       frecnoListSqlOutput.value = buildSelectSqlFromFrecnoList(rawText);
@@ -6609,13 +6718,75 @@
         frecnoListSqlStatus.hidden = false;
         frecnoListSqlStatus.textContent = frecnoListSqlOutput.value.startsWith('--')
           ? 'Please enter valid frecno values.'
-          : 'SELECT SQL generated.';
+          : 'SELECT IN SQL generated.';
       }
     });
   }
 
-  if (generateFrecnoListDeleteBtn && frecnoListSqlOutput) {
-    generateFrecnoListDeleteBtn.addEventListener('click', () => {
+  document.addEventListener('keydown', (event) => {
+    const key = String(event.key || '').toLowerCase();
+    const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'z';
+    const isRedo = (event.ctrlKey || event.metaKey) && (key === 'y' || (event.shiftKey && key === 'z'));
+    if (!isUndo && !isRedo) {
+      return;
+    }
+    if (isEditableTarget(event.target)) {
+      // Keep browser-native undo/redo for all editable fields.
+      event.stopPropagation();
+    }
+  }, true);
+
+  if (generateFrecnoListDeleteInBtn && frecnoListSqlOutput) {
+    generateFrecnoListDeleteInBtn.addEventListener('click', () => {
+      if (frecnoListSqlInput) {
+        frecnoListSqlInput.value = sanitizeOldFrecnoValue(frecnoListSqlInput.value);
+      }
+      normalizeFrecnoInputToVertical();
+      const rawText = frecnoListSqlInput ? frecnoListSqlInput.value : '';
+      frecnoListSqlOutput.value = buildDeleteInSqlFromFrecnoList(rawText);
+      if (copyFrecnoListSqlBtn) {
+        copyFrecnoListSqlBtn.disabled = !frecnoListSqlOutput.value.trim() || frecnoListSqlOutput.value.startsWith('--');
+      }
+      if (copyFrecnoListSqlRow) {
+        copyFrecnoListSqlRow.hidden = false;
+      }
+      if (frecnoListSqlStatus) {
+        frecnoListSqlStatus.hidden = false;
+        frecnoListSqlStatus.textContent = frecnoListSqlOutput.value.startsWith('--')
+          ? 'Please enter valid frecno values.'
+          : 'DELETE IN SQL generated.';
+      }
+    });
+  }
+
+  if (generateFrecnoListSelectNotInBtn && frecnoListSqlOutput) {
+    generateFrecnoListSelectNotInBtn.addEventListener('click', () => {
+      if (frecnoListSqlInput) {
+        frecnoListSqlInput.value = sanitizeOldFrecnoValue(frecnoListSqlInput.value);
+      }
+      normalizeFrecnoInputToVertical();
+      const rawText = frecnoListSqlInput ? frecnoListSqlInput.value : '';
+      frecnoListSqlOutput.value = buildSelectNotInSqlFromFrecnoList(rawText);
+      if (copyFrecnoListSqlBtn) {
+        copyFrecnoListSqlBtn.disabled = !frecnoListSqlOutput.value.trim() || frecnoListSqlOutput.value.startsWith('--');
+      }
+      if (copyFrecnoListSqlRow) {
+        copyFrecnoListSqlRow.hidden = false;
+      }
+      if (frecnoListSqlStatus) {
+        frecnoListSqlStatus.hidden = false;
+        frecnoListSqlStatus.textContent = frecnoListSqlOutput.value.startsWith('--')
+          ? 'Please enter valid frecno values.'
+          : 'SELECT NOT IN SQL generated.';
+      }
+    });
+  }
+
+  if (generateFrecnoListDeleteNotInBtn && frecnoListSqlOutput) {
+    generateFrecnoListDeleteNotInBtn.addEventListener('click', () => {
+      if (frecnoListSqlInput) {
+        frecnoListSqlInput.value = sanitizeOldFrecnoValue(frecnoListSqlInput.value);
+      }
       normalizeFrecnoInputToVertical();
       const rawText = frecnoListSqlInput ? frecnoListSqlInput.value : '';
       frecnoListSqlOutput.value = buildDeleteSqlFromFrecnoList(rawText);
@@ -6629,7 +6800,7 @@
         frecnoListSqlStatus.hidden = false;
         frecnoListSqlStatus.textContent = frecnoListSqlOutput.value.startsWith('--')
           ? 'Please enter valid frecno values.'
-          : 'DELETE SQL generated.';
+          : 'DELETE NOT IN SQL generated.';
       }
     });
   }
@@ -6686,8 +6857,13 @@
   }
 
   if (frecnoListSqlInput) {
-    frecnoListSqlInput.addEventListener('blur', () => {
-      normalizeFrecnoInputToVertical();
+    attachNumericGuard(frecnoListSqlInput, { allowNewLine: true });
+    frecnoListSqlInput.addEventListener('input', () => {
+      // Keep undo stack natural; sanitize is enforced during insert/paste.
+      // Normalization is only applied during SQL generation.
+      if (copyFrecnoListSqlBtn) {
+        copyFrecnoListSqlBtn.disabled = true;
+      }
     });
   }
 
@@ -7236,8 +7412,14 @@
 
   if (generateFrecnoBtn) {
     generateFrecnoBtn.addEventListener('click', async () => {
-      const latestRaw = latestFrecnoInput ? latestFrecnoInput.value.trim() : '';
-      const oldRaw = oldFrecnoInput ? oldFrecnoInput.value : '';
+      const latestRaw = latestFrecnoInput ? sanitizeLatestFrecnoValue(latestFrecnoInput.value).trim() : '';
+      const oldRaw = oldFrecnoInput ? sanitizeOldFrecnoValue(oldFrecnoInput.value) : '';
+      if (latestFrecnoInput) {
+        latestFrecnoInput.value = latestRaw;
+      }
+      if (oldFrecnoInput) {
+        oldFrecnoInput.value = oldRaw;
+      }
 
       if (!frecnoOutput || !frecnoStatus) {
         return;
@@ -7274,9 +7456,9 @@
       }
 
       const latestStart = Number.parseInt(latestRaw, 10);
-      const oldFrecnos = parseFrecnoList(oldRaw);
+      const oldFrecnos = parseStrictFrecnoLines(oldRaw);
       if (oldFrecnos.length === 0) {
-        frecnoStatus.textContent = 'Please enter at least one old frecno.';
+        frecnoStatus.textContent = 'Please enter at least one old frecno (numbers only, one per line).';
         if (frecnoProgress) {
           frecnoProgress.hidden = true;
         }
@@ -7412,10 +7594,12 @@
   }
 
   if (latestFrecnoInput) {
+    attachNumericGuard(latestFrecnoInput);
     latestFrecnoInput.addEventListener('input', hideFrecnoCopyButton);
   }
 
   if (oldFrecnoInput) {
+    attachNumericGuard(oldFrecnoInput, { allowNewLine: true });
     oldFrecnoInput.addEventListener('input', hideFrecnoCopyButton);
   }
 
