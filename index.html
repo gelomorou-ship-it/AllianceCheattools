@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Alliance Cheat Tools</title>
+  <link rel="icon" type="image/png" href="css/Alliancelogonavbar.png" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -59,6 +60,7 @@
       <section class="view tool-view" data-view="csv-tools">
         <div class="tool-card">
           <h2>Sales Validator</h2>
+          <p class="feature-note"><strong>Note:</strong> for WEBPOS only.</p>
           <div class="feature-actions">
             <button type="button" class="feature-btn" id="openAyalaCheckerBtn">Ayala</button>
           </div>
@@ -99,6 +101,7 @@
         <div class="missing-or-layout">
           <section class="missing-or-panel">
             <p class="feature-note">Upload a file and the detector will read Receipt# values only (in row order).</p>
+            <p class="feature-note"><strong>Note:</strong> Applicable only to Government Mandated Computation for 2017.</p>
             <input type="file" id="orFileInput" class="feature-file-input" accept=".txt,.csv,.log,.sql,.xlsx" />
             <div class="file-actions">
               <button type="button" class="feature-btn upload-btn" id="uploadOrFileBtn">Upload</button>
@@ -372,7 +375,6 @@
             <button type="button" class="feature-btn" id="ayalaTotalDiscrepancyBtn">Hourly vs EOD Validation Result</button>
           </div>
           <div class="copy-code-row" id="copyAyalaReportRow" hidden>
-            <button type="button" class="copy-code-btn" id="copyAyalaReportBtn">Copy report</button>
             <button type="button" class="copy-code-btn" id="downloadAyalaCheckerBtn">Download XLSX</button>
           </div>
           <textarea id="ayalaReportOutput" class="sql-output" readonly hidden></textarea>

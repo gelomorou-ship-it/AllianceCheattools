@@ -770,6 +770,33 @@
     return raw.toLowerCase();
   }
 
+  function normalizeDuplicateFieldValue(value) {
+    return String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function normalizeDuplicateFieldName(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function buildDuplicateRowSignature(headers, cells) {
+    const headerList = Array.isArray(headers) ? headers : [];
+    const cellList = Array.isArray(cells) ? cells : [];
+    const parts = [];
+    for (let i = 0; i < headerList.length; i += 1) {
+      const key = normalizeDuplicateFieldName(headerList[i]);
+      if (!key) continue;
+      const value = normalizeDuplicateFieldValue(cellList[i]);
+      parts.push(`${key}=${value}`);
+    }
+    return parts.join('|');
+  }
+
   function isSameGrossAmount(a, b) {
     return Math.abs(roundAyalaAmount(parseNumericAyala(a)) - roundAyalaAmount(parseNumericAyala(b))) <= 0.009;
   }
@@ -793,6 +820,8 @@
           customer: '',
           dateRaw: '',
           date: '',
+          signatureRaw: '',
+          signature: '',
         };
       }
       const receipt = Number.parseInt(String(item.receipt ?? '').trim(), 10);
@@ -805,6 +834,8 @@
         customer: normalizeDuplicateCustomer(item.customerRaw ?? item.customer ?? ''),
         dateRaw: String(item.dateRaw ?? ''),
         date: normalizeDuplicateDate(item.dateRaw ?? item.date ?? ''),
+        signatureRaw: String(item.signatureRaw ?? ''),
+        signature: normalizeDuplicateFieldValue(item.signatureRaw ?? item.signature ?? ''),
       };
     }).filter((item) => Number.isFinite(item.receipt));
 
@@ -842,7 +873,15 @@
         const hasDateB = String(current.dateRaw || '').trim() !== '';
         const dateMismatch = hasDateA && hasDateB && first.date !== current.date;
 
-        const isTrueDuplicate = grossSame && customerSame;
+        const hasSigA = String(first.signature || '').trim() !== '';
+        const hasSigB = String(current.signature || '').trim() !== '';
+        const signatureSame = hasSigA && hasSigB && first.signature === current.signature;
+        const dateSame = (() => {
+          if (!hasDateA && !hasDateB) return true;
+          if (hasDateA !== hasDateB) return false;
+          return first.date === current.date;
+        })();
+        const isTrueDuplicate = signatureSame || (!hasSigA && !hasSigB && grossSame && customerSame && dateSame);
         if (isTrueDuplicate) {
           const issue = `Row ${current.row}: duplicate value ${value} (first seen at row ${first.row})`;
           issues.push(issue);
@@ -855,13 +894,6 @@
         } else {
           const rollbackIssue = `Row ${current.row}: roll back OR# ${value} (mismatch with row ${first.row})`;
           issues.push(rollbackIssue);
-          rollbacks.push({
-            row: current.row,
-            from: first.receipt,
-            to: current.receipt,
-            issue: rollbackIssue,
-            type: 'duplicate_mismatch',
-          });
         }
 
         if (grossMismatch || customerMismatch || dateMismatch) {
@@ -974,6 +1006,23 @@
   function getAyalaNumericFieldValue(record, field) {
     if (!record) {
       return 0;
+    }
+    if (field === 'GROSS_SLS') {
+      const gross = parseNumericAyala(record.GROSS_SLS);
+      const refundAmt = Math.abs(parseNumericAyala(record.REFUND_AMT));
+      const slsFlag = String(record.SLS_FLAG || '').trim().toUpperCase();
+      const isRefundLike = slsFlag === 'R' || slsFlag === 'REFUND' || refundAmt > 0;
+      // Refund rows can carry negative gross while EOD GROSS is typically pre-refund.
+      // Normalize to avoid net-vs-raw mismatch in checker/validation totals.
+      if (isRefundLike && gross < 0 && refundAmt > 0) {
+        return roundAyalaAmount(gross + refundAmt);
+      }
+      // Fallback: never let negative gross reduce hourly gross totals.
+      // In this Ayala format, refunds are tracked in REFUND_AMT/NO_REFUND, not by reducing GROSS_SLS.
+      if (gross < 0) {
+        return 0;
+      }
+      return gross;
     }
     const primary = parseNumericAyala(record[field]);
     if (primary !== 0) {
@@ -1246,6 +1295,8 @@
   const AYALA_DISCREPANCY_TOLERANCE = 1.0;
   // Temporary safety switch: keep raw hourly transactions unchanged (no move-pairs).
   const AYALA_MOVE_PAIRS_ENABLED = true;
+  // Keep full total validation checks. NO_TRN is included as an additional line.
+  const AYALA_TOTAL_VALIDATION_NO_TRN_ONLY = false;
 
   function isSameAyalaAmount(a, b) {
     return Math.abs(roundAyalaAmount(a) - roundAyalaAmount(b)) <= AYALA_DISCREPANCY_TOLERANCE;
@@ -1273,6 +1324,15 @@
 
   function getAyalaTransactionCompositeKey(record) {
     return `${getAyalaTerminalNo(record)}|${getAyalaTransactionNo(record)}`;
+  }
+
+  function normalizeAyalaTerminalKey(value) {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return '-';
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? String(parsed) : raw;
   }
 
   function buildAyalaCombinedFieldValues(records) {
@@ -1565,9 +1625,7 @@
       }
 
       numericFields.forEach((field) => {
-        const numericValue = field === 'OTHER_SLS'
-          ? getAyalaNumericFieldValue(record, 'OTHER_SLS')
-          : parseNumericAyala(record[field]);
+        const numericValue = getAyalaNumericFieldValue(record, field);
         group.sums[field] = (group.sums[field] || 0) + numericValue;
       });
     });
@@ -1689,7 +1747,7 @@
     const movedRefundTotal = APPLY_MOVE_PAIR_ADJUSTMENTS_IN_VALIDATION
       ? roundAyalaAmount(
         (refundPlan.refundMatches || []).reduce(
-          (acc, pair) => acc + Math.abs(parseNumericAyala(pair && pair.refund ? pair.refund.record.REFUND_AMT : 0)),
+          (acc, pair) => acc + parseNumericAyala(pair && pair.refund ? pair.refund.record.REFUND_AMT : 0),
           0
         )
       )
@@ -1885,7 +1943,7 @@
       }
       const refundAmt = parseNumericAyala(record.REFUND_AMT);
       totals.refundAmountHourly += refundAmt;
-      totals.grossHourly += parseNumericAyala(record.GROSS_SLS);
+      totals.grossHourly += getAyalaNumericFieldValue(record, 'GROSS_SLS');
       totals.vatAmntHourly += parseNumericAyala(record.VAT_AMNT);
       totals.vatableSlsHourly += parseNumericAyala(record.VATABLE_SLS);
       totals.nonvatSlsHourly += parseNumericAyala(record.NONVAT_SLS);
@@ -1926,7 +1984,7 @@
 
     const terminalMap = new Map();
     const ensureTerminal = (terNo) => {
-      const key = String(terNo || '').trim() || '-';
+      const key = normalizeAyalaTerminalKey(terNo);
       if (!terminalMap.has(key)) {
         terminalMap.set(key, {
           terNo: key,
@@ -1963,7 +2021,7 @@
       const txnComposite = getAyalaTransactionCompositeKey(record);
       const terminal = ensureTerminal(record.TER_NO);
       if (!movedTxnKeysForValidation.has(txnComposite)) {
-        terminal.hourlyGross += parseNumericAyala(record.GROSS_SLS);
+        terminal.hourlyGross += getAyalaNumericFieldValue(record, 'GROSS_SLS');
       }
       terminal.hourlyEpay += parseNumericAyala(record.EPAY_SLS);
       if (txnComposite && txnComposite !== '|') {
@@ -2135,17 +2193,20 @@
     const hasMismatchGroups = result.mismatches.length > 0;
     const hasMissingGroups = result.missingInEod.length > 0 || result.missingInHourly.length > 0;
     const hasDuplicateTransactions = (result.duplicateTransactions || []).length > 0;
-    const hasTotalDiscrepancy =
-      !grossMatch
-      || !epayMatch
-      || !paymentMatch
-      || !salesTotalMatch
-      || !refundAmountMatch
-      || !refundTxnMatch
-      || !noTrnMatch
-      || hasDuplicateTransactions
-      || hasMismatchGroups
-      || hasMissingGroups;
+    const hasTotalDiscrepancy = AYALA_TOTAL_VALIDATION_NO_TRN_ONLY
+      ? !noTrnMatch
+      : (
+        !grossMatch
+        || !epayMatch
+        || !paymentMatch
+        || !salesTotalMatch
+        || !refundAmountMatch
+        || !refundTxnMatch
+        || !noTrnMatch
+        || hasDuplicateTransactions
+        || hasMismatchGroups
+        || hasMissingGroups
+      );
     const displayDates = result.eodSummary.trnDates && result.eodSummary.trnDates.length > 0
       ? result.eodSummary.trnDates.join(', ')
       : (result.eodSummary.trnDate || '-');
@@ -2155,7 +2216,20 @@
     const headerPrefix = `Transaction Date (${displayDates}), TERMINAL NO (${displayTerminals}), `;
 
     if (!hasTotalDiscrepancy) {
-      lines.push(`${headerPrefix}No discrepancy found between CSV Hourly totals and EOD totals.`);
+      lines.push(
+        AYALA_TOTAL_VALIDATION_NO_TRN_ONLY
+          ? `${headerPrefix}NO_TRN MATCH (Hourly ${result.totals.hourlyTxnCount}, EOD ${result.eodSummary.noTrn})`
+          : `${headerPrefix}No discrepancy found between CSV Hourly totals and EOD totals.`
+      );
+      if (!AYALA_TOTAL_VALIDATION_NO_TRN_ONLY) {
+        lines.push(`NO_TRN MATCH (Hourly ${result.totals.hourlyTxnCount}, EOD ${result.eodSummary.noTrn})`);
+      }
+    } else if (AYALA_TOTAL_VALIDATION_NO_TRN_ONLY) {
+      addFieldLine(
+        'NO_TRN',
+        `Cross Validation, Discrepancy (${Math.abs(result.eodSummary.noTrn - result.totals.hourlyTxnCount)}) `
+        + `NO_TRN (${result.eodSummary.noTrn}) not equal to total of transaction (${result.totals.hourlyTxnCount})`
+      );
     } else {
       if (!grossMatch) {
         addFieldLine('GROSS_SLS',
@@ -2240,6 +2314,16 @@
     const terminalLines = (result.terminalSummaries || [])
       .sort((a, b) => String(a.terNo).localeCompare(String(b.terNo)))
       .map((terminal) => {
+        if (AYALA_TOTAL_VALIDATION_NO_TRN_ONLY) {
+          const noTrnDiff = Math.abs(terminal.eodNoTrn - terminal.hourlyTxn);
+          const noTrnText = terminal.eodNoTrn === terminal.hourlyTxn
+            ? 'NO_TRN MATCH'
+            : `NO_TRN DIFF ${noTrnDiff}`;
+          const duplicateText = terminal.duplicateTxnCount > 0
+            ? `, DUPLICATE_TXN ${terminal.duplicateTxnCount}`
+            : '';
+          return `TERMINAL ${terminal.terNo}: ${noTrnText}${duplicateText} (Hourly NO_TRN ${terminal.hourlyTxn}, EOD NO_TRN ${terminal.eodNoTrn})`;
+        }
         const grossDiff = Math.abs(terminal.eodGross - terminal.hourlyGross);
         const epayDiff = Math.abs(terminal.eodEpay - terminal.hourlyEpay);
         const noTrnDiff = Math.abs(terminal.eodNoTrn - terminal.hourlyTxn);
@@ -2883,6 +2967,13 @@
       return compareAyalaTxnEntries(aTer || '', aTxn || '', bTer || '', bTxn || '');
     });
     let horizontalTxns = sortedExistingTxns;
+    const hourlyTxnCountByTerminal = new Map();
+    horizontalTxns.forEach((txnKey) => {
+      const terKey = normalizeAyalaTerminalKey(String(txnKey).split('|')[0] || '-');
+      hourlyTxnCountByTerminal.set(terKey, (hourlyTxnCountByTerminal.get(terKey) || 0) + 1);
+    });
+    const hourlyTxnCountTotal = Array.from(hourlyTxnCountByTerminal.values())
+      .reduce((sum, count) => sum + count, 0);
 
     // Keep fixed merge row layout up to LDISC (manual checker format).
 
@@ -2909,15 +3000,15 @@
           }
         }
         if (field === 'NO_TRN') {
-          if (isFirstTxnForFile) {
-            const txnCount = txnCountByFile.has(sourceFile) ? txnCountByFile.get(sourceFile).size : 0;
-            return String(txnCount || '');
-          }
+          // NO_TRN is summarized per terminal/total columns below.
           return '';
         }
         if (isProductRawField) {
           const txnRows = txnRowsMap.get(txn) || [];
           return getAyalaRawMultiLineFieldValue(txnRows, field);
+        }
+        if (field === 'GROSS_SLS') {
+          return formatMergeDisplayValue(field, getAyalaNumericFieldValue(record, 'GROSS_SLS'));
         }
         return formatMergeDisplayValue(field, getAyalaRawFieldValue(record, field));
       });
@@ -3203,6 +3294,13 @@
       return compareAyalaTxnEntries(aTer || '', aTxn || '', bTer || '', bTxn || '');
     });
     let horizontalTxns = sortedExistingTxns;
+    const hourlyTxnCountByTerminal = new Map();
+    horizontalTxns.forEach((txnKey) => {
+      const terKey = normalizeAyalaTerminalKey(String(txnKey).split('|')[0] || '-');
+      hourlyTxnCountByTerminal.set(terKey, (hourlyTxnCountByTerminal.get(terKey) || 0) + 1);
+    });
+    const hourlyTxnCountTotal = Array.from(hourlyTxnCountByTerminal.values())
+      .reduce((sum, count) => sum + count, 0);
 
     const eodCombinedValues = buildAyalaCombinedFieldValues(eodRecords);
     const eodGrid = (eodRawPairs && typeof eodRawPairs === 'object' && Array.isArray(eodRawPairs.rows))
@@ -3211,18 +3309,26 @@
     const eodAlias = {
       OTHERSL_SLS: 'OTHER_SLS',
     };
+    const eodNoTrnTotal = roundAyalaAmount(
+      (eodRecords || []).reduce(
+        (sum, record) => sum + (Number.parseInt(String(record && record.NO_TRN || '').replace(/,/g, ''), 10) || 0),
+        0
+      )
+    );
 
     const aoa = [];
     const formulaRows = [];
     const comparisonRows = [];
     const firstTxnColIndex = 1; // column B in sheet (0-based index)
     const lastTxnColIndex = horizontalTxns.length; // B..(B+n-1), 0-based
-    const hourlyTerminalOrder = Array.from(new Set(horizontalTxns.map((key) => String(key).split('|')[0] || '-')))
+    const hourlyTerminalOrder = Array.from(
+      new Set(horizontalTxns.map((key) => normalizeAyalaTerminalKey(String(key).split('|')[0] || '-')))
+    )
       .sort((a, b) => compareAyalaTxnEntries(a, '0', b, '0'));
     const hasMultiHourlyTerminal = hourlyTerminalOrder.length > 1;
     const terminalRangeMap = new Map();
     horizontalTxns.forEach((key, idx) => {
-      const terNo = String(key).split('|')[0] || '-';
+      const terNo = normalizeAyalaTerminalKey(String(key).split('|')[0] || '-');
       const colIndex = firstTxnColIndex + idx;
       if (!terminalRangeMap.has(terNo)) {
         terminalRangeMap.set(terNo, { start: colIndex, end: colIndex });
@@ -3241,7 +3347,7 @@
     const eodTerminalCount = eodGrid.isMulti ? eodGrid.terminals.length : 1;
     const eodTotalColIndex = eodGrid.isMulti ? (eodFirstValueColIndex + eodTerminalCount) : -1;
     const eodBlockEndColIndex = eodGrid.isMulti && eodTotalColIndex >= 0 ? eodTotalColIndex : eodFirstValueColIndex;
-    const compareHighlightFields = new Set(['GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'REFUND_AMT']);
+    const compareHighlightFields = new Set(['NO_TRN', 'GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'REFUND_AMT']);
 
     // Detect refund transactions and match to original transaction (same TER_NO and same absolute gross).
     const getRefundDerivedAmounts = (entry) => {
@@ -3382,9 +3488,30 @@
       : 0;
     const movedRefundTotal = AYALA_MOVE_PAIRS_ENABLED
       ? roundAyalaAmount(
-        refundMatches.reduce((acc, pair) => acc + Math.abs(parseNumericAyala(pair.refund.record.REFUND_AMT)), 0)
+        refundMatches.reduce((acc, pair) => acc + parseNumericAyala(pair.refund.record.REFUND_AMT), 0)
       )
       : 0;
+    const terminalMovedOriginalGross = new Map();
+    const terminalMovedRefund = new Map();
+    if (AYALA_MOVE_PAIRS_ENABLED) {
+      refundMatches.forEach((pair) => {
+        const terKey = normalizeAyalaTerminalKey(
+          (pair && pair.refund && pair.refund.ter)
+          || (pair && pair.original && pair.original.ter)
+          || '-'
+        );
+        const originalGross = parseNumericAyala(pair && pair.original ? pair.original.record.GROSS_SLS : 0);
+        const refundAmount = parseNumericAyala(pair && pair.refund ? pair.refund.record.REFUND_AMT : 0);
+        terminalMovedOriginalGross.set(
+          terKey,
+          roundAyalaAmount((terminalMovedOriginalGross.get(terKey) || 0) + originalGross)
+        );
+        terminalMovedRefund.set(
+          terKey,
+          roundAyalaAmount((terminalMovedRefund.get(terKey) || 0) + refundAmount)
+        );
+      });
+    }
     const paymentAdjustmentFields = [
       'CASH_SLS', 'OTHERSL_SLS', 'CHECK_SLS', 'GC_SLS', 'MASTERCARD_SLS', 'VISA_SLS',
       'AMEX_SLS', 'DINERS_SLS', 'JCB_SLS', 'GCASH_SLS', 'PAYMAYA_SLS', 'ALIPAY_SLS',
@@ -3431,14 +3558,14 @@
           }
         }
         if (field === 'NO_TRN') {
-          if (isFirstTxnForFile) {
-            const txnCount = txnCountByFile.has(sourceFile) ? txnCountByFile.get(sourceFile).size : 0;
-            return String(txnCount || '');
-          }
+          // NO_TRN is summarized in terminal/total columns.
           return '';
         }
         if (productRawFields.has(field)) {
           return getTxnProductLineValue(txn, field, 0);
+        }
+        if (field === 'GROSS_SLS') {
+          return formatMergeDisplayValue(field, getAyalaNumericFieldValue(record, 'GROSS_SLS'));
         }
         return formatMergeDisplayValue(field, getAyalaRawFieldValue(record, field));
       });
@@ -3455,7 +3582,8 @@
       });
       const sumValue = shouldSum
         ? formatAyalaAmount(values.reduce((acc, value) => acc + parseNumericAyala(value), 0))
-        : '';
+        : (field === 'NO_TRN' ? Number(hourlyTxnCountTotal || 0) : '')
+        ;
 
       const eodField = eodAlias[field] || field;
       const eodValue = String(eodCombinedValues.get(eodField) ?? '');
@@ -3469,17 +3597,25 @@
       row[fieldCopyColIndex] = field;
       if (hasMultiHourlyTerminal) {
         hourlyTerminalOrder.forEach((terNo, terIdx) => {
-          const terTotal = shouldSum
-            ? formatAyalaAmount(
-              horizontalTxns.reduce((acc, txnKey) => {
-                const txnTer = String(txnKey).split('|')[0] || '-';
-                if (txnTer !== terNo) {
+          const terTotal = field === 'NO_TRN'
+            ? Number(hourlyTxnCountByTerminal.get(terNo) || 0)
+            : shouldSum
+            ? formatAyalaAmount((() => {
+              let total = horizontalTxns.reduce((acc, txnKey) => {
+                const txnTer = normalizeAyalaTerminalKey(String(txnKey).split('|')[0] || '-');
+                if (txnTer !== terNo || movedTxnKeys.has(txnKey)) {
                   return acc;
                 }
                 const record = txnMap.get(txnKey);
                 return acc + getAyalaNumericFieldValue(record || {}, field);
-              }, 0)
-            )
+              }, 0);
+              if (field === 'GROSS_SLS') {
+                total += terminalMovedOriginalGross.get(terNo) || 0;
+              } else if (field === 'REFUND_AMT') {
+                total += terminalMovedRefund.get(terNo) || 0;
+              }
+              return roundAyalaAmount(total);
+            })())
             : '';
           row[hourlyTerminalStartColIndex + terIdx] = terTotal;
         });
@@ -3493,13 +3629,19 @@
       if (productRawFields.has(field)) {
         productLineRowMap.set(`${field}#0`, rowIndex);
       }
-      formulaRows.push(shouldSum);
+      formulaRows.push(shouldSum || field === 'NO_TRN');
       if (compareHighlightFields.has(field)) {
+        const hourlyCompareValue = field === 'NO_TRN'
+          ? hourlyTxnCountTotal
+          : values.reduce((acc, value) => acc + parseNumericAyala(value), 0);
+        const eodCompareValue = field === 'NO_TRN'
+          ? eodNoTrnTotal
+          : parseNumericAyala(eodValue);
         comparisonRows.push({
           rowIndex,
           field,
-          hourlyValue: values.reduce((acc, value) => acc + parseNumericAyala(value), 0),
-          eodValue: parseNumericAyala(eodValue),
+          hourlyValue: hourlyCompareValue,
+          eodValue: eodCompareValue,
         });
       }
     });
@@ -3536,15 +3678,35 @@
     // Refund pair columns (right side of EOD), aligned to same field rows like manual checker.
     let refundMatrixMaxRow = -1;
     let refundMatrixEndCol = eodBlockEndColIndex;
+    const adjustColsAll = [];
+    const adjustColsByTerminal = new Map();
     const pairSource = refundMatches.length > 0
       ? refundMatches
       : unmatchedRefunds.map((refund) => ({ refund, original: null }));
+    const buildAdjustSumFormula = (rowNumber, cols) => {
+      const validCols = Array.isArray(cols) ? cols : [];
+      if (validCols.length === 0) {
+        return '';
+      }
+      const refs = validCols.map((col) => `${XLSX.utils.encode_col(col)}${rowNumber}`);
+      return `SUM(${refs.join(',')})`;
+    };
     if (hasRefundScenario && pairSource.length > 0) {
       pairSource.forEach((pair, pairIndex) => {
         const colOriginal = eodBlockEndColIndex + 1 + (pairIndex * 3);
         const colRefund = colOriginal + 1;
         const colAdjust = colRefund + 1;
         refundMatrixEndCol = Math.max(refundMatrixEndCol, colAdjust);
+        adjustColsAll.push(colAdjust);
+        const pairTerKey = normalizeAyalaTerminalKey(
+          (pair && pair.refund && pair.refund.ter)
+          || (pair && pair.original && pair.original.ter)
+          || '-'
+        );
+        if (!adjustColsByTerminal.has(pairTerKey)) {
+          adjustColsByTerminal.set(pairTerKey, []);
+        }
+        adjustColsByTerminal.get(pairTerKey).push(colAdjust);
 
         const setByField = (field, col, value, numeric) => {
           if (!fieldRowMap.has(field)) {
@@ -3601,6 +3763,24 @@
 
         fillTxnColumn(original || null, colOriginal);
         fillTxnColumn(refund, colRefund);
+        orderedFields.forEach((field) => {
+          if (productRawFields.has(field) || !fieldRowMap.has(field)) {
+            return;
+          }
+          let adjustValue = 0;
+          if (field === 'GROSS_SLS') {
+            adjustValue = parseNumericAyala(original ? original.record.GROSS_SLS : 0);
+          } else if (field === 'REFUND_AMT') {
+            adjustValue = parseNumericAyala(refund ? refund.record.REFUND_AMT : 0);
+          } else if (paymentAdjustmentFields.includes(field)) {
+            adjustValue = getAyalaAdjustedPaymentFieldValue(refund ? refund.record : null, field)
+              + getAyalaAdjustedPaymentFieldValue(original ? original.record : null, field);
+          }
+          if (isSameAyalaAmount(adjustValue, 0)) {
+            return;
+          }
+          setByField(field, colAdjust, adjustValue, true);
+        });
       });
     }
 
@@ -3641,22 +3821,40 @@
       const fieldName = String(rowValues[0] || '').trim();
       let sumFormula = `SUM(${startCol}${rowNumber}:${endCol}${rowNumber})`;
       let computedValue = roundAyalaAmount(computed);
+      if (fieldName === 'NO_TRN') {
+        const txnRowIndex = fieldRowMap.has('TRANSACTION_NO') ? fieldRowMap.get('TRANSACTION_NO') : -1;
+        const txnRowNumber = txnRowIndex >= 0 ? txnRowIndex + 1 : rowNumber;
+        if (hasMultiHourlyTerminal) {
+          const startNoTrnCol = XLSX.utils.encode_col(hourlyTerminalStartColIndex);
+          const endNoTrnCol = XLSX.utils.encode_col(sumColIndex - 1);
+          sumFormula = `SUM(${startNoTrnCol}${rowNumber}:${endNoTrnCol}${rowNumber})`;
+        } else {
+          sumFormula = `COUNTA(${startCol}${txnRowNumber}:${endCol}${txnRowNumber})`;
+        }
+        computedValue = Number(hourlyTxnCountTotal || 0);
+      }
       const inAdjustmentRange = adjustmentFields.includes(fieldName);
       if (inAdjustmentRange && fieldName === 'GROSS_SLS' && movedOriginalGrossTotal !== 0) {
-        const movedOriginalLiteral = movedOriginalGrossTotal.toFixed(2);
-        sumFormula += `+${movedOriginalLiteral}`;
+        const adjustFormula = buildAdjustSumFormula(rowNumber, adjustColsAll);
+        if (adjustFormula) {
+          sumFormula += `+${adjustFormula}`;
+        }
         computedValue = roundAyalaAmount(computedValue + movedOriginalGrossTotal);
       }
-      if (fieldName === 'REFUND_AMT' && movedRefundTotal > 0) {
-        const movedRefundLiteral = movedRefundTotal.toFixed(2);
-        sumFormula += `+${movedRefundLiteral}`;
+      if (fieldName === 'REFUND_AMT' && !isSameAyalaAmount(movedRefundTotal, 0)) {
+        const adjustFormula = buildAdjustSumFormula(rowNumber, adjustColsAll);
+        if (adjustFormula) {
+          sumFormula += `+${adjustFormula}`;
+        }
         computedValue = roundAyalaAmount(computedValue + movedRefundTotal);
       }
       if (paymentAdjustmentFields.includes(fieldName)) {
         const paymentAdjust = roundAyalaAmount(movedPaymentAdjustByField[fieldName] || 0);
         if (!isSameAyalaAmount(paymentAdjust, 0)) {
-          const paymentAdjustLiteral = paymentAdjust.toFixed(2);
-          sumFormula += paymentAdjust >= 0 ? `+${paymentAdjustLiteral}` : paymentAdjustLiteral;
+          const adjustFormula = buildAdjustSumFormula(rowNumber, adjustColsAll);
+          if (adjustFormula) {
+            sumFormula += `+${adjustFormula}`;
+          }
           computedValue = roundAyalaAmount(computedValue + paymentAdjust);
         }
       }
@@ -3675,12 +3873,45 @@
           const startTerCol = XLSX.utils.encode_col(range.start);
           const endTerCol = XLSX.utils.encode_col(range.end);
           const terAddress = XLSX.utils.encode_cell({ r, c: hourlyTerminalStartColIndex + terIdx });
-          const terComputed = rowValues
+          let terFormula = `SUM(${startTerCol}${rowNumber}:${endTerCol}${rowNumber})`;
+          let terComputed = rowValues
             .slice(range.start, range.end + 1)
             .reduce((acc, value) => acc + parseNumericAyala(value), 0);
+          if (fieldName === 'NO_TRN') {
+            const noTrnCount = Number(hourlyTxnCountByTerminal.get(terNo) || 0);
+            const txnRowIndex = fieldRowMap.has('TRANSACTION_NO') ? fieldRowMap.get('TRANSACTION_NO') : -1;
+            const txnRowNumber = txnRowIndex >= 0 ? txnRowIndex + 1 : rowNumber;
+            const startTxnCol = XLSX.utils.encode_col(range.start);
+            const endTxnCol = XLSX.utils.encode_col(range.end);
+            worksheet[terAddress] = {
+              t: 'n',
+              f: `COUNTA(${startTxnCol}${txnRowNumber}:${endTxnCol}${txnRowNumber})`,
+              v: noTrnCount,
+            };
+            return;
+          }
+          if (fieldName === 'GROSS_SLS') {
+            const grossAdjust = roundAyalaAmount(terminalMovedOriginalGross.get(terNo) || 0);
+            if (!isSameAyalaAmount(grossAdjust, 0)) {
+              const adjustFormula = buildAdjustSumFormula(rowNumber, adjustColsByTerminal.get(terNo) || []);
+              if (adjustFormula) {
+                terFormula += `+${adjustFormula}`;
+              }
+              terComputed = roundAyalaAmount(terComputed + grossAdjust);
+            }
+          } else if (fieldName === 'REFUND_AMT') {
+            const refundAdjust = roundAyalaAmount(terminalMovedRefund.get(terNo) || 0);
+            if (!isSameAyalaAmount(refundAdjust, 0)) {
+              const adjustFormula = buildAdjustSumFormula(rowNumber, adjustColsByTerminal.get(terNo) || []);
+              if (adjustFormula) {
+                terFormula += `+${adjustFormula}`;
+              }
+              terComputed = roundAyalaAmount(terComputed + refundAdjust);
+            }
+          }
           worksheet[terAddress] = {
             t: 'n',
-            f: `SUM(${startTerCol}${rowNumber}:${endTerCol}${rowNumber})`,
+            f: terFormula,
             v: roundAyalaAmount(terComputed),
           };
         });
@@ -3735,7 +3966,11 @@
           });
           if (eodTotalColIndex >= 0) {
             const totalAddr = XLSX.utils.encode_cell({ r: rowIndex, c: eodTotalColIndex });
-            worksheet[totalAddr] = { t: 's', v: String(row.total ?? '') };
+            const isNoTrnRow = String(row.field || '').trim() === 'NO_TRN';
+            const totalValue = isNoTrnRow && (row.total === undefined || row.total === null || String(row.total).trim() === '')
+              ? formatAyalaAmount(eodNoTrnTotal).replace(/\.00$/, '')
+              : String(row.total ?? '');
+            worksheet[totalAddr] = { t: 's', v: totalValue };
           }
         } else {
           const valAddr = XLSX.utils.encode_cell({ r: rowIndex, c: eodFirstValueColIndex });
@@ -3781,13 +4016,16 @@
       },
       font: { color: { rgb: '9C0006' }, bold: true },
     };
-    const eodTotalCompareFields = new Set(['GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'REFUND_AMT']);
+    const eodTotalCompareFields = new Set(['NO_TRN', 'GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'REFUND_AMT']);
     comparisonRows.forEach((item) => {
       const hourlyAddr = XLSX.utils.encode_cell({ r: item.rowIndex, c: sumColIndex });
       const computedHourlyValue = worksheet[hourlyAddr]
         ? parseNumericAyala(worksheet[hourlyAddr].v)
         : item.hourlyValue;
-      const style = isSameAyalaAmount(computedHourlyValue, item.eodValue) ? matchStyle : mismatchStyle;
+      const isMatch = item.field === 'NO_TRN'
+        ? Number.parseInt(String(computedHourlyValue), 10) === Number.parseInt(String(item.eodValue), 10)
+        : isSameAyalaAmount(computedHourlyValue, item.eodValue);
+      const style = isMatch ? matchStyle : mismatchStyle;
       if (worksheet[hourlyAddr]) {
         worksheet[hourlyAddr].s = style;
       }
@@ -4095,12 +4333,14 @@
       const raw = (cells[receiptColumnIndex] || '').trim();
       const match = raw.match(/\d+/);
       if (match) {
+        const signatureRaw = buildDuplicateRowSignature(headerCells, cells);
         values.push({
           receipt: Number.parseInt(match[0], 10),
           row: i + 1,
           grossRaw: grossColumnIndex >= 0 ? String(cells[grossColumnIndex] ?? '').trim() : '',
           customerRaw: customerColumnIndex >= 0 ? String(cells[customerColumnIndex] ?? '').trim() : '',
           dateRaw: dateColumnIndex >= 0 ? String(cells[dateColumnIndex] ?? '').trim() : '',
+          signatureRaw,
         });
       }
     }
@@ -4150,12 +4390,14 @@
       const raw = String(row[receiptColumnIndex] ?? '').trim();
       const match = raw.match(/\d+/);
       if (match) {
+        const signatureRaw = buildDuplicateRowSignature(headerRow, row);
         values.push({
           receipt: Number.parseInt(match[0], 10),
           row: i + 1,
           grossRaw: grossColumnIndex >= 0 ? String(row[grossColumnIndex] ?? '').trim() : '',
           customerRaw: customerColumnIndex >= 0 ? String(row[customerColumnIndex] ?? '').trim() : '',
           dateRaw: dateColumnIndex >= 0 ? String(row[dateColumnIndex] ?? '').trim() : '',
+          signatureRaw,
         });
       }
     }
