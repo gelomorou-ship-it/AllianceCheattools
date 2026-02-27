@@ -1411,6 +1411,92 @@
     return aTxn.localeCompare(bTxn);
   }
 
+  function getAyalaRefundDerivedAmounts(record) {
+    const gross = parseNumericAyala(record && record.GROSS_SLS);
+    const refundAmt = Math.abs(parseNumericAyala(record && record.REFUND_AMT));
+    const vat = Math.abs(parseNumericAyala(record && record.VAT_AMNT));
+    const vatable = Math.abs(parseNumericAyala(record && record.VATABLE_SLS));
+    const nonvat = Math.abs(parseNumericAyala(record && record.NONVAT_SLS));
+    const vatexempt = Math.abs(parseNumericAyala(record && record.VATEXEMPT_SLS));
+    const schrge = Math.abs(parseNumericAyala(record && record.SCHRGE_AMT));
+    const otherSchr = Math.abs(parseNumericAyala(record && record.OTHER_SCHR));
+    const localTax = Math.abs(parseNumericAyala(record && record.LOCAL_TAX));
+    const componentBasedGross = roundAyalaAmount(vat + vatable + nonvat + vatexempt + schrge + otherSchr + localTax);
+    const grossAbs = Math.abs(gross);
+    const derivedGross = grossAbs > 0
+      ? grossAbs
+      : (refundAmt > 0 ? refundAmt : componentBasedGross);
+    return {
+      gross: derivedGross,
+      vat,
+      vatable,
+      refundAmt,
+    };
+  }
+
+  function scoreAyalaRefundOriginalCandidate(refund, orig, options = {}) {
+    const {
+      maxTxnGap = 80,
+      requireDetailAnchor = true,
+      minScore = 80,
+    } = options;
+    const refundRecord = refund && refund.record ? refund.record : null;
+    const origRecord = orig && orig.record ? orig.record : null;
+    const refundItem = String(refundRecord && refundRecord.ITEMCODE || '').trim().toUpperCase();
+    const origItem = String(origRecord && origRecord.ITEMCODE || '').trim().toUpperCase();
+    const refundPrice = Math.abs(parseNumericAyala(refundRecord && refundRecord.PRICE));
+    const origPrice = Math.abs(parseNumericAyala(origRecord && origRecord.PRICE));
+    const refundQty = Math.abs(parseNumericAyala(refundRecord && refundRecord.QTY));
+    const origQty = Math.abs(parseNumericAyala(origRecord && origRecord.QTY));
+    const refundGross = Math.abs(parseNumericAyala(refundRecord && refundRecord.GROSS_SLS));
+    const origGross = Math.abs(parseNumericAyala(origRecord && origRecord.GROSS_SLS));
+    const refundVatable = Math.abs(parseNumericAyala(refundRecord && refundRecord.VATABLE_SLS));
+    const origVatable = Math.abs(parseNumericAyala(origRecord && origRecord.VATABLE_SLS));
+    const refundVat = Math.abs(parseNumericAyala(refundRecord && refundRecord.VAT_AMNT));
+    const origVat = Math.abs(parseNumericAyala(origRecord && origRecord.VAT_AMNT));
+    const refundDerived = getAyalaRefundDerivedAmounts(refundRecord);
+    const txnGap = Number.isFinite(orig && orig.txnNum) && Number.isFinite(refund && refund.txnNum)
+      ? Math.abs(refund.txnNum - orig.txnNum)
+      : 999999;
+    if (txnGap > maxTxnGap) {
+      return { eligible: false, score: -9999, txnGap };
+    }
+
+    const itemMatch = refundItem && origItem && refundItem === origItem;
+    const priceMatch = refundPrice > 0 && isSameAyalaAmount(refundPrice, origPrice);
+    const qtyMatch = refundQty > 0 && isSameAyalaAmount(refundQty, origQty);
+    const grossMatch = refundGross > 0 && isSameAyalaAmount(refundGross, origGross);
+    const derivedGrossMatch = refundDerived.gross > 0 && isSameAyalaAmount(refundDerived.gross, origGross);
+    const vatableMatch = refundVatable > 0 && isSameAyalaAmount(refundVatable, origVatable);
+    const vatMatch = refundVat > 0 && isSameAyalaAmount(refundVat, origVat);
+    const strongAmountMatch = grossMatch || derivedGrossMatch || (vatableMatch && vatMatch);
+    const detailAnchorMatch = itemMatch || priceMatch || qtyMatch;
+
+    if (!strongAmountMatch) {
+      return { eligible: false, score: -9999, txnGap };
+    }
+    if (requireDetailAnchor && !detailAnchorMatch) {
+      return { eligible: false, score: -9999, txnGap };
+    }
+
+    let score = 0;
+    if (itemMatch) score += 120;
+    if (priceMatch) score += 80;
+    if (qtyMatch) score += 40;
+    if (grossMatch) score += 100;
+    else if (derivedGrossMatch) score += 70;
+    if (vatableMatch) score += 60;
+    if (vatMatch) score += 45;
+    if (refundItem && origItem && !itemMatch) score -= 80;
+    if (refundPrice > 0 && !priceMatch) score -= 55;
+    if (refundQty > 0 && !qtyMatch) score -= 20;
+    if (refundGross > 0 && !grossMatch) score -= 70;
+    if (refundVatable > 0 && !vatableMatch) score -= 40;
+    if (refundVat > 0 && !vatMatch) score -= 30;
+    score -= Math.floor(txnGap / 5);
+    return { eligible: score >= minScore, score, txnGap };
+  }
+
   function buildAyalaRefundPairPlan(hourlyRecords) {
     if (!AYALA_MOVE_PAIRS_ENABLED) {
       return {
@@ -1465,19 +1551,14 @@
     const unmatchedRefunds = [];
 
     refundEntries.forEach((refund) => {
-      const refundItem = String(refund.record.ITEMCODE || '').trim().toUpperCase();
-      const refundPrice = Math.abs(parseNumericAyala(refund.record.PRICE));
-      const refundQty = Math.abs(parseNumericAyala(refund.record.QTY));
-      const refundGross = Math.abs(parseNumericAyala(refund.record.GROSS_SLS));
-      const refundVatable = Math.abs(parseNumericAyala(refund.record.VATABLE_SLS));
-      const refundVat = Math.abs(parseNumericAyala(refund.record.VAT_AMNT));
-
       const scoredCandidates = originalEntries
         .filter((orig) => {
           if (usedOriginalKeys.has(orig.key)) {
             return false;
           }
-          if ((orig.ter || '-') !== (refund.ter || '-')) {
+          const origTerKey = normalizeAyalaTerminalKey(orig.ter || '-');
+          const refundTerKey = normalizeAyalaTerminalKey(refund.ter || '-');
+          if (origTerKey !== refundTerKey) {
             return false;
           }
           if (Number.isFinite(orig.txnNum) && Number.isFinite(refund.txnNum)) {
@@ -1486,33 +1567,22 @@
           return true;
         })
         .map((orig) => {
-          const origItem = String(orig.record.ITEMCODE || '').trim().toUpperCase();
-          const origPrice = Math.abs(parseNumericAyala(orig.record.PRICE));
-          const origQty = Math.abs(parseNumericAyala(orig.record.QTY));
-          const origGross = Math.abs(parseNumericAyala(orig.record.GROSS_SLS));
-          const origVatable = Math.abs(parseNumericAyala(orig.record.VATABLE_SLS));
-          const origVat = Math.abs(parseNumericAyala(orig.record.VAT_AMNT));
-          let score = 0;
-
-          if (refundItem && origItem && refundItem === origItem) score += 100;
-          if (refundPrice > 0 && isSameAyalaAmount(refundPrice, origPrice)) score += 60;
-          if (refundQty > 0 && isSameAyalaAmount(refundQty, origQty)) score += 20;
-          if (refundGross > 0 && isSameAyalaAmount(refundGross, origGross)) score += 40;
-          if (refundVatable > 0 && isSameAyalaAmount(refundVatable, origVatable)) score += 35;
-          if (refundVat > 0 && isSameAyalaAmount(refundVat, origVat)) score += 25;
-
-          const txnGap = Number.isFinite(orig.txnNum) && Number.isFinite(refund.txnNum)
-            ? Math.abs(refund.txnNum - orig.txnNum)
-            : 999999;
-          return { orig, score, txnGap };
+          const candidate = scoreAyalaRefundOriginalCandidate(refund, orig);
+          return {
+            orig,
+            score: candidate.score,
+            txnGap: candidate.txnGap,
+            eligible: candidate.eligible,
+          };
         })
+        .filter((candidate) => candidate.eligible)
         .sort((a, b) => {
           if (b.score !== a.score) return b.score - a.score;
           return a.txnGap - b.txnGap;
         });
 
       const best = scoredCandidates[0];
-      if (!best || best.score < 20) {
+      if (!best) {
         unmatchedRefunds.push(refund);
         return;
       }
@@ -2086,6 +2156,7 @@
       missingInEod,
       missingInHourly,
       mismatches,
+      unmatchedRefunds: refundPlan.unmatchedRefunds || [],
       hourlyGroupCount: hourlyGroups.size,
       eodGroupCount: eodMap.size,
       hourlyRows,
@@ -2193,6 +2264,8 @@
     const hasMismatchGroups = result.mismatches.length > 0;
     const hasMissingGroups = result.missingInEod.length > 0 || result.missingInHourly.length > 0;
     const hasDuplicateTransactions = (result.duplicateTransactions || []).length > 0;
+    const unmatchedRefunds = Array.isArray(result.unmatchedRefunds) ? result.unmatchedRefunds : [];
+    const hasUnmatchedRefunds = unmatchedRefunds.length > 0;
     const hasTotalDiscrepancy = AYALA_TOTAL_VALIDATION_NO_TRN_ONLY
       ? !noTrnMatch
       : (
@@ -2204,6 +2277,7 @@
         || !refundTxnMatch
         || !noTrnMatch
         || hasDuplicateTransactions
+        || hasUnmatchedRefunds
         || hasMismatchGroups
         || hasMissingGroups
       );
@@ -2289,6 +2363,25 @@
           );
         });
       }
+      if (hasUnmatchedRefunds) {
+        lines.push(
+          `Cross Validation, Discrepancy (${unmatchedRefunds.length}) UNMATCHED REFUND transaction(s) detected in CSV Hourly.`
+        );
+        unmatchedRefunds
+          .slice()
+          .sort((a, b) => compareAyalaTxnEntries(a.ter || '', a.txn || '', b.ter || '', b.txn || ''))
+          .forEach((entry) => {
+            const record = entry && entry.record ? entry.record : {};
+            const txnNo = String(entry && entry.txn ? entry.txn : record.TRANSACTION_NO || '').trim() || '-';
+            const terNo = String(entry && entry.ter ? entry.ter : record.TER_NO || '').trim() || '-';
+            const trnTime = String(record.TRN_TIME || '').trim() || '-';
+            const refundAmt = formatAyalaAmount(parseNumericAyala(record.REFUND_AMT));
+            const gross = formatAyalaAmount(parseNumericAyala(record.GROSS_SLS));
+            lines.push(
+              `UNMATCHED REFUND: TRANSACTION NO (${txnNo}), TERMINAL NO (${terNo}), TRN_TIME (${trnTime}), REFUND_AMT (${refundAmt}), GROSS_SLS (${gross})`
+            );
+          });
+      }
 
       if (result.missingInEod.length > 0) {
         lines.push(`Cross Validation, Discrepancy (${result.missingInEod.length}) Missing groups in EOD.`);
@@ -2360,6 +2453,7 @@
       'OPEN_SALES_9', 'OPEN_SALES_10', 'OPEN_SALES_11', 'GC_EXCESS',
     ];
     const paymentSourceFields = ['VAT_AMNT', 'VATABLE_SLS', 'NONVAT_SLS', 'VATEXEMPT_SLS', 'SCHRGE_AMT', 'OTHER_SCHR', 'LOCAL_TAX'];
+    const cardBreakdownFields = ['MASTERCARD_SLS', 'VISA_SLS', 'AMEX_SLS', 'DINERS_SLS', 'JCB_SLS', 'MASTERDEBIT_SLS', 'VISADEBIT_SLS'];
     const grossTotalFields = [
       'VAT_AMNT', 'VATABLE_SLS', 'NONVAT_SLS', 'VATEXEMPT_SLS', 'VATEXEMPT_AMNT',
       'LOCAL_TAX', 'PWD_DISC', 'SNRCIT_DISC', 'EMPLO_DISC', 'AYALA_DISC', 'STORE_DISC',
@@ -2374,25 +2468,53 @@
       return n.toFixed(2);
     };
 
-    const sorted = (hourlyRecords || [])
-      .map((record) => ({
-        txn: String(record.TRANSACTION_NO || '').trim(),
-        ter: String(record.TER_NO || '').trim(),
-        key: getAyalaTransactionCompositeKey(record),
-        record,
-      }))
-      .filter((item) => item.txn && item.key && item.key !== '|')
+    const numericAggregateFields = Array.from(new Set([
+      ...paymentTotalFields,
+      ...paymentSourceFields,
+      ...grossTotalFields,
+      ...cardBreakdownFields,
+      'CARD_SLS',
+      'GROSS_SLS',
+      'REFUND_AMT',
+    ]));
+    const grouped = new Map();
+    (hourlyRecords || []).forEach((record) => {
+      const key = getAyalaTransactionCompositeKey(record);
+      const txn = String(record.TRANSACTION_NO || '').trim();
+      if (!txn || !key || key === '|') {
+        return;
+      }
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      grouped.get(key).push(record);
+    });
+
+    const sorted = Array.from(grouped.entries())
+      .map(([key, records]) => {
+        const first = (records && records[0]) || {};
+        const mergedRecord = { ...first };
+        mergedRecord.__hasGcExcessRaw = (records || [])
+          .some((row) => String(getAyalaRawFieldValue(row, 'GC_EXCESS') || '').trim() !== '');
+        mergedRecord.__hasGcSlsRaw = (records || [])
+          .some((row) => String(getAyalaRawFieldValue(row, 'GC_SLS') || '').trim() !== '');
+        numericAggregateFields.forEach((field) => {
+          const sum = (records || []).reduce((acc, row) => acc + parseNumericAyala(getAyalaRawFieldValue(row, field)), 0);
+          mergedRecord[field] = roundAyalaAmount(sum);
+        });
+        return {
+          txn: String(first.TRANSACTION_NO || '').trim(),
+          ter: String(first.TER_NO || '').trim(),
+          key,
+          record: mergedRecord,
+        };
+      })
       .sort((a, b) => {
         return compareAyalaTxnEntries(a.ter, a.txn, b.ter, b.txn);
       });
 
-    const seen = new Set();
     const lines = [];
     sorted.forEach((item) => {
-      if (seen.has(item.key)) {
-        return;
-      }
-      seen.add(item.key);
       const record = item.record;
       const grossSls = parseNumericAyala(record.GROSS_SLS);
       const grossTotal = grossTotalFields.reduce((sum, field) => sum + parseNumericAyala(record[field]), 0);
@@ -2400,9 +2522,31 @@
       const payment = paymentSourceFields.reduce((sum, field) => sum + getAyalaNumericFieldValue(record, field), 0);
       const paymentTotal = paymentTotalFields.reduce((sum, field) => sum + getAyalaAdjustedPaymentFieldValue(record, field), 0);
       const discrepancy = getAyalaPaymentDiscrepancy(payment, paymentTotal);
+      const cardSls = getAyalaNumericFieldValue(record, 'CARD_SLS');
+      const cardBreakdownTotal = cardBreakdownFields.reduce((sum, field) => sum + getAyalaNumericFieldValue(record, field), 0);
+      const cardDiscrepancy = getAyalaPaymentDiscrepancy(cardSls, cardBreakdownTotal);
+      const cardAbsSum = cardBreakdownFields
+        .reduce((sum, field) => sum + Math.abs(getAyalaNumericFieldValue(record, field)), 0);
+      const gcSls = getAyalaNumericFieldValue(record, 'GC_SLS');
+      const gcExcess = getAyalaNumericFieldValue(record, 'GC_EXCESS');
+      const hasGcExcessRaw = Boolean(record && record.__hasGcExcessRaw);
+      const hasGcSlsRaw = Boolean(record && record.__hasGcSlsRaw);
+      const hasGcExcessWithoutGc = hasGcExcessRaw
+        && Math.abs(gcExcess) > AYALA_DISCREPANCY_TOLERANCE
+        && (!hasGcSlsRaw || Math.abs(gcSls) <= AYALA_DISCREPANCY_TOLERANCE);
       const hasGrossIssue = grossDiscrepancy > AYALA_DISCREPANCY_TOLERANCE;
       const hasPaymentIssue = discrepancy > AYALA_DISCREPANCY_TOLERANCE;
-      if (!hasGrossIssue && !hasPaymentIssue) return;
+      const hasCardIssue = cardDiscrepancy > AYALA_DISCREPANCY_TOLERANCE;
+      const hasCardReversalPattern = Math.abs(cardBreakdownTotal) <= AYALA_DISCREPANCY_TOLERANCE
+        && cardAbsSum > AYALA_DISCREPANCY_TOLERANCE
+        && Math.abs(cardSls) > AYALA_DISCREPANCY_TOLERANCE;
+      const shouldReportCardIssue = hasCardIssue
+        && (
+          hasPaymentIssue
+          || cardDiscrepancy >= 100
+          || hasCardReversalPattern
+        );
+      if (!hasGrossIssue && !hasPaymentIssue && !hasGcExcessWithoutGc) return;
 
       const txNo = String(item.txn || '').padEnd(15, ' ');
       const terNo = String(record.TER_NO || '-');
@@ -2422,13 +2566,31 @@
           .map((field) => `${field} = ${formatTxnAmount(getAyalaNumericFieldValue(record, field))}`)
           .join(', ');
         const paymentTotalText = paymentTotalFields
-          .map((field) => `${field} = ${formatTxnAmount(getAyalaNumericFieldValue(record, field))}`)
+          .map((field) => `${field} = ${formatTxnAmount(getAyalaAdjustedPaymentFieldValue(record, field))}`)
           .join(', ');
         lines.push(
           `TRANSACTION NO (${txNo}), TERMINAL NO (${terNo}), `
           + `Discrepancy (${formatAyalaAmount(discrepancy)}) PAYMENT (${formatAyalaAmount(payment)}) : `
           + `(${paymentSourceText}, ). and PAYMENT TOTAL (${formatAyalaAmount(paymentTotal)}) :  `
           + `(${paymentTotalText}, ).`
+        );
+      }
+
+      if (shouldReportCardIssue) {
+        const cardBreakdownText = cardBreakdownFields
+          .map((field) => `${field} = ${formatTxnAmount(getAyalaNumericFieldValue(record, field))}`)
+          .join(', ');
+        lines.push(
+          `TRANSACTION NO (${txNo}), TERMINAL NO (${terNo}), `
+          + `Discrepancy (${formatAyalaAmount(cardDiscrepancy)}) CARD_SLS (${formatAyalaAmount(cardSls)}) and CARD BREAKDOWN (${formatAyalaAmount(cardBreakdownTotal)}) : `
+          + `(${cardBreakdownText}, ).`
+        );
+      }
+
+      if (hasGcExcessWithoutGc) {
+        lines.push(
+          `TRANSACTION NO (${txNo}), TERMINAL NO (${terNo}), `
+          + `Discrepancy (${formatAyalaAmount(Math.abs(gcExcess))}) GC_EXCESS (${formatAyalaAmount(gcExcess)}) exists while GC_SLS is ${formatAyalaAmount(gcSls)}.`
         );
       }
     });
@@ -3350,34 +3512,12 @@
     const compareHighlightFields = new Set(['NO_TRN', 'GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'REFUND_AMT']);
 
     // Detect refund transactions and match to original transaction (same TER_NO and same absolute gross).
-    const getRefundDerivedAmounts = (entry) => {
-      const gross = parseNumericAyala(entry.record.GROSS_SLS);
-      const refundAmt = Math.abs(parseNumericAyala(entry.record.REFUND_AMT));
-      const vat = Math.abs(parseNumericAyala(entry.record.VAT_AMNT));
-      const vatable = Math.abs(parseNumericAyala(entry.record.VATABLE_SLS));
-      const nonvat = Math.abs(parseNumericAyala(entry.record.NONVAT_SLS));
-      const vatexempt = Math.abs(parseNumericAyala(entry.record.VATEXEMPT_SLS));
-      const schrge = Math.abs(parseNumericAyala(entry.record.SCHRGE_AMT));
-      const otherSchr = Math.abs(parseNumericAyala(entry.record.OTHER_SCHR));
-      const localTax = Math.abs(parseNumericAyala(entry.record.LOCAL_TAX));
-      // Fallback for refund formats where gross is zero but components are populated.
-      const componentBasedGross = roundAyalaAmount(vat + vatable + nonvat + vatexempt + schrge + otherSchr + localTax);
-      const grossAbs = Math.abs(gross);
-      const derivedGross = grossAbs > 0
-        ? grossAbs
-        : (refundAmt > 0 ? refundAmt : componentBasedGross);
-      return {
-        gross: derivedGross,
-        vat,
-        vatable,
-      };
-    };
     const isRefundRecord = (entry) => {
       const gross = parseNumericAyala(entry.record.GROSS_SLS);
       const refundAmt = parseNumericAyala(entry.record.REFUND_AMT);
       const slsFlag = String(entry.record.SLS_FLAG || '').trim().toUpperCase();
       const trnType = String(entry.record.TRN_TYPE || '').trim().toUpperCase();
-      const derived = getRefundDerivedAmounts(entry);
+      const derived = getAyalaRefundDerivedAmounts(entry && entry.record ? entry.record : null);
       return (
         gross < 0
         || refundAmt > 0
@@ -3394,20 +3534,14 @@
     const refundMatches = [];
     const unmatchedRefunds = [];
     refundEntries.forEach((refund) => {
-      const refundDerived = getRefundDerivedAmounts(refund);
-      const refundItem = String(refund.record.ITEMCODE || '').trim().toUpperCase();
-      const refundPrice = Math.abs(parseNumericAyala(refund.record.PRICE));
-      const refundQty = Math.abs(parseNumericAyala(refund.record.QTY));
-      const refundGross = Math.abs(parseNumericAyala(refund.record.GROSS_SLS));
-      const refundVatable = Math.abs(parseNumericAyala(refund.record.VATABLE_SLS));
-      const refundVat = Math.abs(parseNumericAyala(refund.record.VAT_AMNT));
-
       const scoredCandidates = originalEntries
         .filter((orig) => {
           if (usedOriginalKeys.has(orig.key)) {
             return false;
           }
-          if ((orig.ter || '-') !== (refund.ter || '-')) {
+          const origTerKey = normalizeAyalaTerminalKey(orig.ter || '-');
+          const refundTerKey = normalizeAyalaTerminalKey(refund.ter || '-');
+          if (origTerKey !== refundTerKey) {
             return false;
           }
           if (Number.isFinite(orig.txnNum) && Number.isFinite(refund.txnNum)) {
@@ -3416,40 +3550,15 @@
           return true;
         })
         .map((orig) => {
-          const origItem = String(orig.record.ITEMCODE || '').trim().toUpperCase();
-          const origPrice = Math.abs(parseNumericAyala(orig.record.PRICE));
-          const origQty = Math.abs(parseNumericAyala(orig.record.QTY));
-          const origGross = Math.abs(parseNumericAyala(orig.record.GROSS_SLS));
-          const origVatable = Math.abs(parseNumericAyala(orig.record.VATABLE_SLS));
-          const origVat = Math.abs(parseNumericAyala(orig.record.VAT_AMNT));
-          let score = 0;
-
-          if (refundItem && origItem && refundItem === origItem) {
-            score += 100;
-          }
-          if (refundPrice > 0 && isSameAyalaAmount(refundPrice, origPrice)) {
-            score += 60;
-          }
-          if (refundQty > 0 && isSameAyalaAmount(refundQty, origQty)) {
-            score += 20;
-          }
-          if (refundGross > 0 && isSameAyalaAmount(refundGross, origGross)) {
-            score += 40;
-          } else if (refundDerived.gross > 0 && isSameAyalaAmount(refundDerived.gross, origGross)) {
-            score += 30;
-          }
-          if (refundVatable > 0 && isSameAyalaAmount(refundVatable, origVatable)) {
-            score += 35;
-          }
-          if (refundVat > 0 && isSameAyalaAmount(refundVat, origVat)) {
-            score += 25;
-          }
-
-          const txnGap = Number.isFinite(orig.txnNum) && Number.isFinite(refund.txnNum)
-            ? Math.abs(refund.txnNum - orig.txnNum)
-            : 999999;
-          return { orig, score, txnGap };
+          const candidate = scoreAyalaRefundOriginalCandidate(refund, orig);
+          return {
+            orig,
+            score: candidate.score,
+            txnGap: candidate.txnGap,
+            eligible: candidate.eligible,
+          };
         })
+        .filter((candidate) => candidate.eligible)
         .sort((a, b) => {
           if (b.score !== a.score) {
             return b.score - a.score;
@@ -3458,7 +3567,7 @@
         });
 
       const best = scoredCandidates[0];
-      if (!best || best.score < 20) {
+      if (!best) {
         unmatchedRefunds.push(refund);
         return;
       }
@@ -3535,6 +3644,7 @@
 
     const fieldRowMap = new Map();
     const productLineRowMap = new Map();
+    const hourlyTotalTerminalLabel = '';
     orderedFields.forEach((field, fieldIndex) => {
       const shouldSum = sumStartIndex >= 0
         && sumEndIndex >= 0
@@ -3582,7 +3692,11 @@
       });
       const sumValue = shouldSum
         ? formatAyalaAmount(values.reduce((acc, value) => acc + parseNumericAyala(value), 0))
-        : (field === 'NO_TRN' ? Number(hourlyTxnCountTotal || 0) : '')
+        : (
+          field === 'NO_TRN'
+            ? Number(hourlyTxnCountTotal || 0)
+            : (field === 'TER_NO' ? hourlyTotalTerminalLabel : '')
+        )
         ;
 
       const eodField = eodAlias[field] || field;
@@ -3599,6 +3713,11 @@
         hourlyTerminalOrder.forEach((terNo, terIdx) => {
           const terTotal = field === 'NO_TRN'
             ? Number(hourlyTxnCountByTerminal.get(terNo) || 0)
+            : field === 'TER_NO'
+            ? (() => {
+              const parsedTer = Number.parseInt(String(terNo || '').trim(), 10);
+              return Number.isFinite(parsedTer) ? parsedTer : String(terNo || '-');
+            })()
             : shouldSum
             ? formatAyalaAmount((() => {
               let total = horizontalTxns.reduce((acc, txnKey) => {
@@ -4022,13 +4141,6 @@
       const computedHourlyValue = worksheet[hourlyAddr]
         ? parseNumericAyala(worksheet[hourlyAddr].v)
         : item.hourlyValue;
-      const isMatch = item.field === 'NO_TRN'
-        ? Number.parseInt(String(computedHourlyValue), 10) === Number.parseInt(String(item.eodValue), 10)
-        : isSameAyalaAmount(computedHourlyValue, item.eodValue);
-      const style = isMatch ? matchStyle : mismatchStyle;
-      if (worksheet[hourlyAddr]) {
-        worksheet[hourlyAddr].s = style;
-      }
 
       let eodRowIndex = item.rowIndex;
       if (rawFieldRowMap.size > 0 && rawFieldRowMap.has(item.field)) {
@@ -4040,6 +4152,16 @@
       }
       const eodValueCol = useTotalCol ? eodTotalColIndex : eodFirstValueColIndex;
       const eodAddr = XLSX.utils.encode_cell({ r: eodRowIndex, c: eodValueCol });
+      const eodCellValue = worksheet[eodAddr]
+        ? parseNumericAyala(worksheet[eodAddr].v)
+        : item.eodValue;
+      const isMatch = item.field === 'NO_TRN'
+        ? Number.parseInt(String(computedHourlyValue), 10) === Number.parseInt(String(eodCellValue), 10)
+        : isSameAyalaAmount(computedHourlyValue, eodCellValue);
+      const style = isMatch ? matchStyle : mismatchStyle;
+      if (worksheet[hourlyAddr]) {
+        worksheet[hourlyAddr].s = style;
+      }
       if (worksheet[eodAddr]) {
         worksheet[eodAddr].s = style;
       }
