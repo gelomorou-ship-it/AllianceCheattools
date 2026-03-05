@@ -3,7 +3,44 @@
   const views = document.querySelectorAll('.view[data-view]');
   const splashText = document.getElementById('transitionSplashText');
   const buildVersionBadge = document.getElementById('buildVersionBadge');
-  const APP_BUILD_VERSION = '2026-03-05.2';
+
+  function readVersionFromAssetUrl(assetPathPart) {
+    try {
+      const nodes = Array.from(document.querySelectorAll('script[src],link[href]'));
+      for (let i = 0; i < nodes.length; i += 1) {
+        const node = nodes[i];
+        const raw = node.getAttribute('src') || node.getAttribute('href') || '';
+        if (!raw || !raw.includes(assetPathPart)) continue;
+        const url = new URL(raw, window.location.href);
+        const v = String(url.searchParams.get('v') || '').trim();
+        if (v) return v;
+      }
+    } catch (error) {
+      // Ignore parse errors and continue fallback chain.
+    }
+    return '';
+  }
+
+  function buildAutoVersionLabel() {
+    const rawLastModified = String(document.lastModified || '').trim();
+    const dt = rawLastModified ? new Date(rawLastModified) : null;
+    if (dt && !Number.isNaN(dt.getTime())) {
+      const yyyy = String(dt.getFullYear());
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const hh = String(dt.getHours()).padStart(2, '0');
+      const min = String(dt.getMinutes()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}.${hh}${min}`;
+    }
+
+    const fromScript = readVersionFromAssetUrl('js/script.js');
+    if (fromScript) return fromScript;
+
+    const fromCss = readVersionFromAssetUrl('css/style.css');
+    if (fromCss) return fromCss;
+
+    return 'unknown';
+  }
 
   const checkMissingOrBtn = document.getElementById('checkMissingOrBtn');
   const openGenerateFrecnoBtn = document.getElementById('openGenerateFrecnoBtn');
@@ -8763,7 +8800,7 @@
   setActiveView(hasInitial ? initial : 'home', false);
 
   if (buildVersionBadge) {
-    const versionLabel = `Build ${APP_BUILD_VERSION}`;
+    const versionLabel = `Build ${buildAutoVersionLabel()}`;
     buildVersionBadge.textContent = versionLabel;
     buildVersionBadge.title = versionLabel;
   }
