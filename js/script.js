@@ -3,7 +3,7 @@
   const views = document.querySelectorAll('.view[data-view]');
   const splashText = document.getElementById('transitionSplashText');
   const buildVersionBadge = document.getElementById('buildVersionBadge');
-  const APP_BUILD_VERSION = '2026-03-05.1';
+  const APP_BUILD_VERSION = '2026-03-05.2';
 
   const checkMissingOrBtn = document.getElementById('checkMissingOrBtn');
   const openGenerateFrecnoBtn = document.getElementById('openGenerateFrecnoBtn');
@@ -8142,6 +8142,7 @@
     buildVersionBadge.title = versionLabel;
   }
 })();
+
 
 
 
