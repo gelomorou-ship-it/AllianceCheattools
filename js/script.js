@@ -99,6 +99,12 @@
   const reportInvoiceInput = document.getElementById('reportInvoiceInput');
   const reportClientInput = document.getElementById('reportClientInput');
   const reportTsAssignedInput = document.getElementById('reportTsAssignedInput');
+  const reportBillingStatusInput = document.getElementById('reportBillingStatusInput');
+  const reportBillingStatusCustomInput = document.getElementById('reportBillingStatusCustomInput');
+  const reportSupportTypeInput = document.getElementById('reportSupportTypeInput');
+  const reportSupportTypeCustomInput = document.getElementById('reportSupportTypeCustomInput');
+  const reportProductNameInput = document.getElementById('reportProductNameInput');
+  const reportProductNameCustomInput = document.getElementById('reportProductNameCustomInput');
   const reportTitleInput = document.getElementById('reportTitleInput');
   const reportConcernInput = document.getElementById('reportConcernInput');
   const reportActivitiesEditor = document.getElementById('reportActivitiesEditor');
@@ -1980,12 +1986,28 @@
         const records = byTxnComposite.get(dupKey) || [];
         const signatures = new Set(records.map((record) => buildDuplicateSignature(record)));
         const hasRealConflict = signatures.size > 1;
+        const lineSigCounts = new Map();
+        records.forEach((record) => {
+          const lineSig = [
+            ...duplicateSensitiveFields,
+            'QTY', 'ITEMCODE', 'PRICE', 'LDISC',
+          ]
+            .map((field) => `${field}:${normalizeForDuplicate(record, field)}`)
+            .join('|');
+          lineSigCounts.set(lineSig, (lineSigCounts.get(lineSig) || 0) + 1);
+        });
+        const counts = Array.from(lineSigCounts.values());
+        const gcd = (a, b) => (b === 0 ? Math.abs(a) : gcd(b, a % b));
+        const repeatFactor = counts.reduce((acc, n) => gcd(acc, n), 0);
+        const hasRepeatedBlock = repeatFactor > 1;
         return {
           ...item,
           hasRealConflict,
+          hasRepeatedBlock,
+          duplicateType: hasRealConflict ? 'DETAIL_MISMATCH' : (hasRepeatedBlock ? 'EXACT_DUPLICATE' : 'NONE'),
         };
       })
-      .filter((item) => item.count > 1 && item.hasRealConflict)
+      .filter((item) => item.count > 1 && (item.hasRealConflict || item.hasRepeatedBlock))
       .sort((a, b) => compareAyalaTxnEntries(a.terNo, a.txnNo, b.terNo, b.txnNo));
 
     hourlyRows.sort((a, b) => {
@@ -2361,8 +2383,9 @@
           `Cross Validation, Discrepancy (${result.duplicateTransactions.length}) Duplicate TRANSACTION_NO detected in CSV Hourly.`
         );
         result.duplicateTransactions.forEach((dup) => {
+          const duplicateType = String(dup.duplicateType || '').trim() || 'EXACT_DUPLICATE';
           lines.push(
-            `Duplicate TRANSACTION_NO (${dup.txnNo}), TERMINAL NO (${dup.terNo}), occurrences (${dup.count})`
+            `Duplicate TRANSACTION_NO (${dup.txnNo}), TERMINAL NO (${dup.terNo}), occurrences (${dup.count}), TYPE (${duplicateType})`
           );
         });
       }
@@ -3364,40 +3387,81 @@
     const sumEndIndex = orderedFields.indexOf('LDISC');
 
     const normalizedRows = hourlyRecords
-      .map((record) => ({
+      .map((record, idx) => ({
+        idx,
         txn: String(record.TRANSACTION_NO || '').trim(),
         ter: String(record.TER_NO || '').trim(),
         key: getAyalaTransactionCompositeKey(record),
         record,
       }))
-      .filter((row) => row.txn && row.key && row.key !== '|')
-      .sort((a, b) => {
-        return compareAyalaTxnEntries(a.ter, a.txn, b.ter, b.txn);
-      });
+      .filter((row) => row.txn && row.key && row.key !== '|');
 
-    const transactionEntries = normalizedRows
-      .filter((row) => row.txn && row.key && row.key !== '|')
-      .map((row) => ({
-        key: row.key,
+    // Keep by-column layout, but do not silently merge repeated transaction blocks.
+    // Same key in contiguous rows is normally one transaction with item lines,
+    // but if the item signature sequence restarts, split to a new duplicate occurrence.
+    const occurrenceCounterByBaseKey = new Map();
+    const occurrences = [];
+    let currentOccurrence = null;
+    const getItemSignature = (record) => {
+      const qty = String(getAyalaRawFieldValue(record, 'QTY') || '').trim();
+      const item = String(getAyalaRawFieldValue(record, 'ITEMCODE') || '').trim();
+      const price = String(getAyalaRawFieldValue(record, 'PRICE') || '').trim();
+      const disc = String(getAyalaRawFieldValue(record, 'LDISC') || '').trim();
+      const signature = `${qty}|${item}|${price}|${disc}`;
+      return signature === '|||' ? '' : signature;
+    };
+    normalizedRows.forEach((row) => {
+      const baseKey = row.key;
+      const isSameAsCurrent = currentOccurrence && currentOccurrence.baseKey === baseKey;
+      if (isSameAsCurrent) {
+        const itemSig = getItemSignature(row.record);
+        const shouldSplitDuplicateBlock = itemSig
+          && currentOccurrence.itemSignatures.has(itemSig)
+          && currentOccurrence.rows.length > 0;
+        if (!shouldSplitDuplicateBlock) {
+          currentOccurrence.rows.push(row.record);
+          if (itemSig) {
+            currentOccurrence.itemSignatures.add(itemSig);
+          }
+          return;
+        }
+      }
+      const occurrenceNo = (occurrenceCounterByBaseKey.get(baseKey) || 0) + 1;
+      occurrenceCounterByBaseKey.set(baseKey, occurrenceNo);
+      const firstItemSig = getItemSignature(row.record);
+      currentOccurrence = {
+        baseKey,
+        displayKey: `${baseKey}#${occurrenceNo}`,
         txn: row.txn,
         ter: row.ter || '-',
         txnNum: Number.parseInt(row.txn, 10),
-        record: row.record,
-      }));
+        rows: [row.record],
+        itemSignatures: new Set(firstItemSig ? [firstItemSig] : []),
+        firstRecord: row.record,
+        firstIndex: row.idx,
+      };
+      occurrences.push(currentOccurrence);
+    });
+
+    occurrences.sort((a, b) => {
+      const cmp = compareAyalaTxnEntries(a.ter, a.txn, b.ter, b.txn);
+      if (cmp !== 0) return cmp;
+      return a.firstIndex - b.firstIndex;
+    });
+
+    const transactionEntries = occurrences.map((occ) => ({
+      key: occ.displayKey,
+      txn: occ.txn,
+      ter: occ.ter || '-',
+      txnNum: Number.parseInt(occ.txn, 10),
+      record: occ.firstRecord,
+    }));
 
     const txnMap = new Map();
     const txnRowsMap = new Map();
-    normalizedRows.forEach((row) => {
-      if (!txnMap.has(row.key)) {
-        txnMap.set(row.key, row.record);
-      }
-      if (!row.key || row.key === '|') {
-        return;
-      }
-      if (!txnRowsMap.has(row.key)) {
-        txnRowsMap.set(row.key, []);
-      }
-      txnRowsMap.get(row.key).push(row.record);
+    occurrences.forEach((occ) => {
+      txnMap.set(occ.displayKey, occ.firstRecord);
+      txnRowsMap.set(occ.displayKey, occ.rows.slice());
     });
     const getTxnProductLineValue = (txnKey, field, lineIndex = 0) => {
       const txnRows = txnRowsMap.get(txnKey) || [];
@@ -3430,11 +3494,10 @@
 
     const firstTxnKeyByFile = new Map();
     const txnCountByFile = new Map();
-    txnMap.forEach((record) => {
+    txnMap.forEach((record, txnKey) => {
       const sourceFile = String(record.__sourceFile || '').trim();
       const terNo = String(record.TER_NO || '').trim();
       const txnNumber = Number.parseInt(String(record.TRANSACTION_NO || '').trim(), 10);
-      const txnKey = getAyalaTransactionCompositeKey(record);
       if (!sourceFile || !Number.isFinite(txnNumber)) {
         return;
       }
@@ -3663,7 +3726,7 @@
           return '';
         }
         const sourceFile = String(record.__sourceFile || '').trim();
-        const currentTxnKey = getAyalaTransactionCompositeKey(record);
+        const currentTxnKey = txn;
         const isFirstTxnForFile = sourceFile && firstTxnKeyByFile.get(sourceFile) === currentTxnKey;
         if (firstOnlyFields.has(field)) {
           if (!isFirstTxnForFile) {
@@ -3671,8 +3734,14 @@
           }
         }
         if (field === 'NO_TRN') {
-          // NO_TRN is summarized in terminal/total columns.
-          return '';
+          // Show per-file transaction count only on the first transaction column of each source file.
+          if (!isFirstTxnForFile) {
+            return '';
+          }
+          const fileTxnCount = sourceFile && txnCountByFile.has(sourceFile)
+            ? (txnCountByFile.get(sourceFile) || new Set()).size
+            : 0;
+          return String(fileTxnCount || '');
         }
         if (productRawFields.has(field)) {
           return getTxnProductLineValue(txn, field, 0);
@@ -3711,7 +3780,7 @@
       sheetValues.forEach((value, idx) => {
         row[firstTxnColIndex + idx] = value;
       });
-      row[fieldCopyColIndex] = field;
+      row[fieldCopyColIndex] = productRawFields.has(field) ? '' : field;
       if (hasMultiHourlyTerminal) {
         hourlyTerminalOrder.forEach((terNo, terIdx) => {
           const terTotal = field === 'NO_TRN'
@@ -3784,7 +3853,7 @@
           values.forEach((value, idx) => {
             row[firstTxnColIndex + idx] = String(value ?? '').trim();
           });
-          row[fieldCopyColIndex] = field;
+          row[fieldCopyColIndex] = '';
           row[sumColIndex] = '';
           row[separatorColIndex] = '';
           row[eodFieldColIndex] = '';
@@ -4065,14 +4134,14 @@
       if (eodGrid.isMulti) {
         const headerRowIndex = 1; // row 2
         const headerFieldAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c: eodFieldColIndex });
-        worksheet[headerFieldAddr] = { t: 's', v: 'TER_NO' };
+        worksheet[headerFieldAddr] = { t: 's', v: '' };
         eodGrid.terminals.forEach((terNo, tIdx) => {
           const headerAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c: eodFirstValueColIndex + tIdx });
-          worksheet[headerAddr] = { t: 's', v: String(terNo || '-') };
+          worksheet[headerAddr] = { t: 's', v: '' };
         });
         if (eodTotalColIndex >= 0) {
           const totalHeaderAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c: eodTotalColIndex });
-          worksheet[totalHeaderAddr] = { t: 's', v: 'TOTAL' };
+          worksheet[totalHeaderAddr] = { t: 's', v: '' };
         }
       }
 
@@ -4245,32 +4314,73 @@
       'HAS_ERROR',
     ];
 
-    const sorted = (hourlyRecords || [])
-      .map((record) => ({
+    const normalized = (hourlyRecords || [])
+      .map((record, idx) => ({
+        idx,
         txn: String(record.TRANSACTION_NO || '').trim(),
         ter: String(record.TER_NO || '').trim(),
         key: getAyalaTransactionCompositeKey(record),
         record,
       }))
-      .filter((item) => item.txn && item.key && item.key !== '|')
+      .filter((item) => item.txn && item.key && item.key !== '|');
+
+    const getTxnLineSignature = (record) => {
+      const qty = String(getAyalaRawFieldValue(record, 'QTY') || '').trim();
+      const item = String(getAyalaRawFieldValue(record, 'ITEMCODE') || '').trim();
+      const price = String(getAyalaRawFieldValue(record, 'PRICE') || '').trim();
+      const disc = String(getAyalaRawFieldValue(record, 'LDISC') || '').trim();
+      const sig = `${qty}|${item}|${price}|${disc}`;
+      return sig === '|||' ? '' : sig;
+    };
+
+    const occurrences = [];
+    let current = null;
+    const occCounter = new Map();
+    normalized.forEach((item) => {
+      const baseKey = item.key;
+      const sameAsCurrent = current && current.baseKey === baseKey;
+      if (sameAsCurrent) {
+        const sig = getTxnLineSignature(item.record);
+        const shouldSplit = sig && current.lineSigs.has(sig) && current.rows.length > 0;
+        if (!shouldSplit) {
+          current.rows.push(item.record);
+          if (sig) current.lineSigs.add(sig);
+          return;
+        }
+      }
+      const occNo = (occCounter.get(baseKey) || 0) + 1;
+      occCounter.set(baseKey, occNo);
+      const sig = getTxnLineSignature(item.record);
+      current = {
+        baseKey,
+        displayKey: `${baseKey}#${occNo}`,
+        txn: item.txn,
+        ter: item.ter || '-',
+        firstIndex: item.idx,
+        rows: [item.record],
+        lineSigs: new Set(sig ? [sig] : []),
+      };
+      occurrences.push(current);
+    });
+
+    const sorted = occurrences
+      .slice()
       .sort((a, b) => {
-        return compareAyalaTxnEntries(a.ter, a.txn, b.ter, b.txn);
+        const cmp = compareAyalaTxnEntries(a.ter, a.txn, b.ter, b.txn);
+        if (cmp !== 0) return cmp;
+        return a.firstIndex - b.firstIndex;
       });
 
     const aoa = [headers];
     const rowRecords = [null];
-    const seen = new Set();
     sorted.forEach((item) => {
-      if (seen.has(item.key)) {
-        return;
-      }
-      seen.add(item.key);
+      const rowRecord = (item.rows && item.rows[0]) ? item.rows[0] : {};
       const row = [
         item.txn,
-        String(item.record.TER_NO || ''),
-        roundAyalaAmount(parseNumericAyala(item.record.GROSS_SLS)),
-        ...grossTotalFields.map((field) => roundAyalaAmount(parseNumericAyala(item.record[field]))),
-        ...paymentTotalFields.map((field) => roundAyalaAmount(getAyalaNumericFieldValue(item.record, field))),
+        String(rowRecord.TER_NO || ''),
+        roundAyalaAmount(parseNumericAyala(rowRecord.GROSS_SLS)),
+        ...grossTotalFields.map((field) => roundAyalaAmount(parseNumericAyala(rowRecord[field]))),
+        ...paymentTotalFields.map((field) => roundAyalaAmount(getAyalaNumericFieldValue(rowRecord, field))),
         0,
         0,
         0,
@@ -4280,7 +4390,7 @@
         '',
       ];
       aoa.push(row);
-      rowRecords.push(item.record);
+      rowRecords.push(rowRecord);
     });
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -5007,6 +5117,12 @@
     if (reportDocxOutput) {
       reportDocxOutput.value = 'Ready to generate DOCX.';
     }
+    if (reportProductNameInput && !String(reportProductNameInput.value || '').trim()) {
+      reportProductNameInput.value = 'WebPOS';
+    }
+    syncBillingStatusCustomVisibility();
+    syncSupportTypeCustomVisibility();
+    syncProductNameCustomVisibility();
   }
 
   function openActivitiesEditorDialog() {
@@ -5913,6 +6029,413 @@
     return false;
   }
 
+  function normalizeChecklistKey(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  function getReportSupportTypeValue() {
+    if (!reportSupportTypeInput) return '';
+    const base = String(reportSupportTypeInput.value || '').trim();
+    if (base === '__custom__') {
+      return reportSupportTypeCustomInput ? String(reportSupportTypeCustomInput.value || '').trim() : '';
+    }
+    return base;
+  }
+
+  function getReportBillingStatusValue() {
+    if (!reportBillingStatusInput) return '';
+    const base = String(reportBillingStatusInput.value || '').trim();
+    if (base === '__custom__') {
+      return reportBillingStatusCustomInput ? String(reportBillingStatusCustomInput.value || '').trim() : '';
+    }
+    return base;
+  }
+
+  function getReportProductNameValue() {
+    if (!reportProductNameInput) return 'WebPOS';
+    const base = String(reportProductNameInput.value || '').trim();
+    if (base === '__custom__') {
+      const customValue = reportProductNameCustomInput ? String(reportProductNameCustomInput.value || '').trim() : '';
+      return customValue || 'WebPOS';
+    }
+    return base || 'WebPOS';
+  }
+
+  function syncBillingStatusCustomVisibility() {
+    if (!reportBillingStatusInput || !reportBillingStatusCustomInput) return;
+    const isCustom = String(reportBillingStatusInput.value || '').trim() === '__custom__';
+    reportBillingStatusCustomInput.hidden = !isCustom;
+    if (!isCustom) {
+      reportBillingStatusCustomInput.value = '';
+    } else {
+      reportBillingStatusCustomInput.focus();
+    }
+  }
+
+  function syncSupportTypeCustomVisibility() {
+    if (!reportSupportTypeInput || !reportSupportTypeCustomInput) return;
+    const isCustom = String(reportSupportTypeInput.value || '').trim() === '__custom__';
+    reportSupportTypeCustomInput.hidden = !isCustom;
+    if (!isCustom) {
+      reportSupportTypeCustomInput.value = '';
+    } else {
+      reportSupportTypeCustomInput.focus();
+    }
+  }
+
+  function syncProductNameCustomVisibility() {
+    if (!reportProductNameInput || !reportProductNameCustomInput) return;
+    const isCustom = String(reportProductNameInput.value || '').trim() === '__custom__';
+    reportProductNameCustomInput.hidden = !isCustom;
+    if (!isCustom) {
+      reportProductNameCustomInput.value = '';
+    } else {
+      reportProductNameCustomInput.focus();
+    }
+  }
+
+  function getChecklistLinesFromCell(cellNode) {
+    const lines = [];
+    if (!cellNode) return lines;
+    const paragraphs = Array.from(cellNode.childNodes).filter((n) => n && n.nodeType === 1 && n.localName === 'p');
+    paragraphs.forEach((p) => {
+      const textNodes = getWNodeList(p, 't');
+      if (!textNodes.length) return;
+      const text = textNodes.map((t) => String(t.textContent || '')).join('').replace(/\r/g, '');
+      if (text.trim()) lines.push(text.trim());
+    });
+    return lines;
+  }
+
+  function countChecklistOptionMatches(lines, optionList) {
+    const normalizedOptionKeys = new Set();
+    (Array.isArray(optionList) ? optionList : []).forEach((entry) => {
+      const label = String(entry && entry.label ? entry.label : '').trim();
+      if (label) normalizedOptionKeys.add(normalizeChecklistKey(label));
+      const aliases = Array.isArray(entry && entry.aliases) ? entry.aliases : [];
+      aliases.forEach((alias) => {
+        const key = normalizeChecklistKey(alias);
+        if (key) normalizedOptionKeys.add(key);
+      });
+    });
+    return (Array.isArray(lines) ? lines : []).reduce((acc, line) => {
+      const clean = String(line || '').replace(/^[\s_]*x?[\s_:-]*/i, '').trim();
+      const lineKey = normalizeChecklistKey(clean);
+      return acc + (lineKey && normalizedOptionKeys.has(lineKey) ? 1 : 0);
+    }, 0);
+  }
+
+  function getChecklistOptionKeys(optionList) {
+    const keys = new Set();
+    (Array.isArray(optionList) ? optionList : []).forEach((entry) => {
+      const label = String(entry && entry.label ? entry.label : '').trim();
+      const labelKey = normalizeChecklistKey(label);
+      if (labelKey) keys.add(labelKey);
+      const aliases = Array.isArray(entry && entry.aliases) ? entry.aliases : [];
+      aliases.forEach((alias) => {
+        const key = normalizeChecklistKey(alias);
+        if (key) keys.add(key);
+      });
+    });
+    return Array.from(keys);
+  }
+
+  function countChecklistMatchesInCellText(cellNode, optionList) {
+    if (!cellNode) return 0;
+    const normalizedCellText = normalizeChecklistKey(getTextFromNode(cellNode));
+    if (!normalizedCellText) return 0;
+    const keys = getChecklistOptionKeys(optionList);
+    let hit = 0;
+    keys.forEach((key) => {
+      if (key && normalizedCellText.includes(key)) {
+        hit += 1;
+      }
+    });
+    return hit;
+  }
+
+  function getChecklistCellScore(cellNode, optionList) {
+    if (!cellNode) return 0;
+    const lineHit = countChecklistOptionMatches(getChecklistLinesFromCell(cellNode), optionList);
+    const textHit = countChecklistMatchesInCellText(cellNode, optionList);
+    const rawText = String(getTextFromNode(cellNode) || '');
+    const markerHint = /_{2,}|(^|\s)x(\s|_|$)/i.test(rawText) ? 1 : 0;
+    return (lineHit * 3) + (textHit * 2) + markerHint;
+  }
+
+  function findChecklistTargetCellByLabel(xmlDoc, labelVariants, optionList) {
+    const variants = (Array.isArray(labelVariants) ? labelVariants : [labelVariants])
+      .map((v) => String(v || '').trim())
+      .filter(Boolean);
+    if (!variants.length) return null;
+
+    const candidates = [];
+    const textNodes = getWNodeList(xmlDoc, 't');
+    for (let i = 0; i < textNodes.length; i += 1) {
+      const text = String(textNodes[i].textContent || '').trim();
+      if (!text) continue;
+      const matched = variants.find((label) => text.includes(label));
+      if (!matched) continue;
+
+      const tc = getClosestByLocalName(textNodes[i], 'tc');
+      if (!tc) continue;
+
+      // Some templates keep label + checklist in the same cell.
+      candidates.push(tc);
+
+      const nextTc = getNextSiblingByLocalName(tc, 'tc');
+      if (nextTc) candidates.push(nextTc);
+
+      const tr = getClosestByLocalName(tc, 'tr');
+      const belowTr = getNextSiblingByLocalName(tr, 'tr');
+      if (belowTr) {
+        const belowCells = Array.from(belowTr.childNodes).filter((n) => n && n.nodeType === 1 && n.localName === 'tc');
+        const currentRowCells = tr ? Array.from(tr.childNodes).filter((n) => n && n.nodeType === 1 && n.localName === 'tc') : [];
+        const idx = currentRowCells.indexOf(tc);
+        if (idx >= 0 && idx < belowCells.length) {
+          candidates.push(belowCells[idx]);
+        }
+        if (belowCells.length) candidates.push(belowCells[0]);
+      }
+    }
+
+    if (!candidates.length) return null;
+
+    let bestCell = null;
+    let bestScore = 0;
+    candidates.forEach((cell) => {
+      const score = getChecklistCellScore(cell, optionList);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCell = cell;
+      }
+    });
+
+    // Require at least one meaningful checklist signal; otherwise do not rewrite.
+    return bestScore > 0 ? bestCell : null;
+  }
+
+  function findChecklistTargetCell(xmlDoc, labelVariants) {
+    const variants = Array.isArray(labelVariants) ? labelVariants : [labelVariants];
+    const textNodes = getWNodeList(xmlDoc, 't');
+    for (let i = 0; i < textNodes.length; i += 1) {
+      const text = String(textNodes[i].textContent || '').trim();
+      if (!text) continue;
+      const matched = variants.find((label) => text.includes(String(label || '').trim()));
+      if (!matched) continue;
+      const tc = getClosestByLocalName(textNodes[i], 'tc');
+      const nextTc = getNextSiblingByLocalName(tc, 'tc');
+      if (nextTc) return nextTc;
+      if (tc) {
+        const tr = getClosestByLocalName(tc, 'tr');
+        const belowTr = getNextSiblingByLocalName(tr, 'tr');
+        if (belowTr) {
+          const belowCells = Array.from(belowTr.childNodes).filter((n) => n && n.nodeType === 1 && n.localName === 'tc');
+          if (belowCells.length > 0) {
+            // Prefer the cell in the same column index as the label cell.
+            const currentRowCells = tr ? Array.from(tr.childNodes).filter((n) => n && n.nodeType === 1 && n.localName === 'tc') : [];
+            const idx = currentRowCells.indexOf(tc);
+            if (idx >= 0 && idx < belowCells.length) return belowCells[idx];
+            return belowCells[0];
+          }
+        }
+        return tc;
+      }
+    }
+    return null;
+  }
+
+  function rewriteChecklistCell(cellNode, xmlDoc, selectedKeys, optionList, options = {}) {
+    if (!cellNode) return false;
+    const existingLines = getChecklistLinesFromCell(cellNode);
+    if (!existingLines.length) return false;
+
+    const normalizedSelected = new Set((Array.isArray(selectedKeys) ? selectedKeys : []).map((k) => normalizeChecklistKey(k)).filter(Boolean));
+    const normalizedOptions = Array.isArray(optionList) ? optionList : [];
+
+    const toLabel = (line) => String(line || '').replace(/^[\s_]*x?[\s_:-]*/i, '').trim();
+    const normalizedLabelMap = new Map();
+    normalizedOptions.forEach((entry) => {
+      const label = String(entry && entry.label ? entry.label : '').trim();
+      if (!label) return;
+      const aliases = Array.isArray(entry.aliases) ? entry.aliases : [label];
+      aliases.forEach((alias) => {
+        const key = normalizeChecklistKey(alias);
+        if (!key) return;
+        normalizedLabelMap.set(key, label);
+      });
+      const labelKey = normalizeChecklistKey(label);
+      if (labelKey && !normalizedLabelMap.has(labelKey)) {
+        normalizedLabelMap.set(labelKey, label);
+      }
+    });
+
+    const findOptionKey = (labelText) => {
+      const rawKey = normalizeChecklistKey(labelText);
+      if (!rawKey) return '';
+      if (normalizedLabelMap.has(rawKey)) return rawKey;
+      const keys = Array.from(normalizedLabelMap.keys());
+      for (let i = 0; i < keys.length; i += 1) {
+        const key = keys[i];
+        if (rawKey.includes(key) || key.includes(rawKey)) return key;
+      }
+      return rawKey;
+    };
+
+    // Preserve template lines when present; if template is already damaged,
+    // rebuild from configured choices so options are visible again.
+    const existingOptionLikeCount = existingLines.reduce((acc, line) => {
+      const key = findOptionKey(toLabel(line));
+      return acc + (normalizedLabelMap.has(key) ? 1 : 0);
+    }, 0);
+    const baseLabels = existingOptionLikeCount >= 2
+      ? existingLines.map((line) => toLabel(line)).filter(Boolean)
+      : normalizedOptions.map((entry) => String(entry && entry.label ? entry.label : '').trim()).filter(Boolean);
+
+    const headingLines = existingLines.filter((line) => {
+      const clean = toLabel(line);
+      const optionKey = findOptionKey(clean);
+      const isKnownOption = optionKey && normalizedLabelMap.has(optionKey);
+      if (isKnownOption) return false;
+      return /:\s*$/.test(String(clean || '').trim()) || /\bbilling\s*status\b/i.test(String(clean || '').trim()) || /\bsupport\s*type\b/i.test(String(clean || '').trim());
+    });
+
+    let hasAnyMatch = false;
+    const rewritten = baseLabels.map((labelText) => {
+      const optionKey = findOptionKey(labelText);
+      const canonicalLabel = normalizedLabelMap.get(optionKey) || labelText;
+      const currentKey = normalizeChecklistKey(canonicalLabel);
+      const isSelected = normalizedSelected.has(currentKey);
+      if (isSelected) hasAnyMatch = true;
+      return `${isSelected ? '__x__' : '____'} ${canonicalLabel}`;
+    });
+
+    // If no explicit selection matched, keep full choices unmarked instead of failing.
+    const finalLines = headingLines.concat(rewritten);
+    return setCellText(cellNode, finalLines.join('\n'), xmlDoc, options);
+  }
+
+  function updateChecklistCellMarkersInPlace(cellNode, selectedKeys, optionList) {
+    if (!cellNode) return false;
+    const normalizedSelected = new Set((Array.isArray(selectedKeys) ? selectedKeys : []).map((k) => normalizeChecklistKey(k)).filter(Boolean));
+    if (!normalizedSelected.size) return false;
+
+    const normalizedLabelMap = new Map();
+    (Array.isArray(optionList) ? optionList : []).forEach((entry) => {
+      const label = String(entry && entry.label ? entry.label : '').trim();
+      if (!label) return;
+      const aliases = Array.isArray(entry.aliases) ? entry.aliases : [label];
+      aliases.forEach((alias) => {
+        const key = normalizeChecklistKey(alias);
+        if (!key) return;
+        normalizedLabelMap.set(key, label);
+      });
+      const labelKey = normalizeChecklistKey(label);
+      if (labelKey && !normalizedLabelMap.has(labelKey)) {
+        normalizedLabelMap.set(labelKey, label);
+      }
+    });
+
+    const toLabel = (line) => String(line || '').replace(/^[\s_]*x?[\s_:-]*/i, '').trim();
+    const findOptionKey = (labelText) => {
+      const rawKey = normalizeChecklistKey(labelText);
+      if (!rawKey) return '';
+      if (normalizedLabelMap.has(rawKey)) return rawKey;
+      const keys = Array.from(normalizedLabelMap.keys());
+      for (let i = 0; i < keys.length; i += 1) {
+        const key = keys[i];
+        if (rawKey.includes(key) || key.includes(rawKey)) return key;
+      }
+      return rawKey;
+    };
+
+    const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const toMarker = (selected) => (selected ? '__x__ ' : '____ ');
+    const optionEntries = Array.from(new Set(
+      (Array.isArray(optionList) ? optionList : [])
+        .map((entry) => String(entry && entry.label ? entry.label : '').trim())
+        .filter(Boolean),
+    )).map((label) => ({
+      label,
+      key: findOptionKey(label),
+    })).filter((entry) => Boolean(entry.key && normalizedLabelMap.has(entry.key)))
+      .sort((a, b) => String(b.label || '').length - String(a.label || '').length);
+
+    let touched = 0;
+    const paragraphs = Array.from(cellNode.childNodes).filter((n) => n && n.nodeType === 1 && n.localName === 'p');
+    paragraphs.forEach((p) => {
+      const textNodes = getWNodeList(p, 't');
+      if (!textNodes.length) return;
+
+      textNodes.forEach((node) => {
+        const rawText = String(node.textContent || '');
+        if (!String(rawText || '').trim()) return;
+
+        let nextText = rawText;
+        optionEntries.forEach((entry) => {
+          const label = entry.label;
+          const selected = normalizedSelected.has(entry.key) || normalizedSelected.has(normalizeChecklistKey(label));
+          const marker = toMarker(selected);
+          const esc = escapeRegex(label).replace(/\\\s+/g, '\\s+');
+
+          const hasLongerContainingLabel = optionEntries.some((other) => {
+            if (!other || other.label === label) return false;
+            const otherLabel = String(other.label || '');
+            if (otherLabel.length <= label.length) return false;
+            if (!otherLabel.toLowerCase().includes(String(label || '').toLowerCase())) return false;
+            const otherEsc = escapeRegex(otherLabel).replace(/\\\s+/g, '\\s+');
+            const otherPattern = new RegExp(`(^|[^A-Za-z0-9])(${otherEsc})(?=[^A-Za-z0-9]|$)`, 'i');
+            return otherPattern.test(nextText);
+          });
+          if (hasLongerContainingLabel) return;
+
+          const withMarker = new RegExp(`(^|[^A-Za-z0-9])((?:_{2,}\\s*x\\s*_{0,}|_{2,}|_x_|x)\\s*)(${esc})(?=[^A-Za-z0-9]|$)`, 'i');
+          if (withMarker.test(nextText)) {
+            nextText = nextText.replace(withMarker, `$1${marker}$3`);
+            return;
+          }
+
+          const plainLabel = new RegExp(`(^|[^A-Za-z0-9])(${esc})(?=[^A-Za-z0-9]|$)`, 'i');
+          if (plainLabel.test(nextText)) {
+            nextText = nextText.replace(plainLabel, `$1${marker}$2`);
+          }
+        });
+
+        if (nextText !== rawText) {
+          node.textContent = nextText;
+          touched += 1;
+        }
+      });
+    });
+
+    return touched > 0;
+  }
+
+  function applyChecklistSelectionByLabel(xmlDoc, labelVariants, selectedValue, optionList, options = {}) {
+    let targetCell = findChecklistTargetCellByLabel(xmlDoc, labelVariants, optionList);
+    if (!targetCell) {
+      // Direct fallback: use nearest next/same column cell from matched label row.
+      targetCell = findChecklistTargetCell(xmlDoc, labelVariants);
+    }
+    if (!targetCell) return false;
+
+    const rawValues = Array.isArray(selectedValue) ? selectedValue : [selectedValue];
+    const selectedKeys = rawValues
+      .map((v) => normalizeChecklistKey(v))
+      .filter(Boolean);
+    if (!selectedKeys.length) return false;
+
+    // Preserve original template layout: only switch markers in-place.
+    if (updateChecklistCellMarkersInPlace(targetCell, selectedKeys, optionList)) {
+      return true;
+    }
+
+    // Safe mode: do not rebuild or rewrite full lines (prevents template damage).
+    return false;
+  }
+
   function getRowBelowLabelCell(xmlDoc, labelText) {
     const textNodes = getWNodeList(xmlDoc, 't');
     for (let i = 0; i < textNodes.length; i += 1) {
@@ -6232,11 +6755,78 @@
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(templateXml, 'application/xml');
 
-    setValueByLabelInNextCell(xmlDoc, 'DATE:', payload.date, { bold: true });
-    setValueAfterLabelInSameCell(xmlDoc, 'JOF #', payload.jof, { bold: true });
-    setValueAfterLabelInSameCell(xmlDoc, 'Invoice No.', payload.invoice, { bold: true });
-    setValueByLabelInNextCell(xmlDoc, 'Client Name:', payload.client, { bold: true });
-    setValueByLabelInNextCell(xmlDoc, 'TS Assigned:', payload.tsAssigned, { bold: true });
+    const tryFillByLabelVariants = (labels, value, options = {}) => {
+      if (!isTruthyText(value)) return false;
+      const variants = Array.isArray(labels) ? labels : [labels];
+      for (let i = 0; i < variants.length; i += 1) {
+        const label = String(variants[i] || '').trim();
+        if (!label) continue;
+        if (setValueByLabelInNextCell(xmlDoc, label, value, options)) return true;
+      }
+      for (let i = 0; i < variants.length; i += 1) {
+        const label = String(variants[i] || '').trim();
+        if (!label) continue;
+        if (setValueAfterLabelInSameCell(xmlDoc, label, value, options)) return true;
+      }
+      for (let i = 0; i < variants.length; i += 1) {
+        const label = String(variants[i] || '').trim();
+        if (!label) continue;
+        if (setValueInRowBelowLabel(xmlDoc, label, value, options)) return true;
+      }
+      return false;
+    };
+
+    tryFillByLabelVariants(['DATE:', 'DATE'], payload.date, { bold: true });
+    tryFillByLabelVariants(['JOF #', 'JOF#', 'JOF No.', 'JOF Number'], payload.jof, { bold: true });
+    tryFillByLabelVariants(['Invoice No.', 'Invoice No', 'Invoice #', 'Invoice Number'], payload.invoice, { bold: true });
+    tryFillByLabelVariants(['Client Name:', 'Client Name', 'Client:'], payload.client, { bold: true });
+    tryFillByLabelVariants(['TS Assigned:', 'TS Assigned', 'Assigned TS:', 'TS:'], payload.tsAssigned, { bold: true });
+    const billingChecklistOptions = [
+      { label: 'Billed', aliases: ['Billed'] },
+      { label: 'Not Billed', aliases: ['Not Billed'] },
+      { label: 'with APS', aliases: ['with APS', 'With APS'] },
+      { label: 'Pending from previous task', aliases: ['Pending from previous task', 'Pending'] },
+      { label: 'Warranty', aliases: ['Warranty'] },
+      { label: 'WebPOS', aliases: ['WebPOS', 'Web POS'] },
+    ];
+    const supportChecklistOptions = [
+      { label: 'Onsite', aliases: ['Onsite', 'On Site'] },
+      { label: 'Offsite/Remote', aliases: ['Offsite/Remote', 'Offsite', 'Remote', 'Offsite Remote'] },
+    ];
+
+    const billingStatusKey = normalizeChecklistKey(payload.billingStatus);
+    const productKey = normalizeChecklistKey(payload.productName || 'WebPOS');
+    const billingSelections = [];
+    if (billingStatusKey) billingSelections.push(payload.billingStatus);
+    // Rule: Warranty implies with APS + WebPOS.
+    if (billingStatusKey === 'warranty') {
+      billingSelections.push('with APS');
+      billingSelections.push('WebPOS');
+    } else if (billingStatusKey === 'billed') {
+      // Rule: Billed marks Billed + WebPOS only (no APS).
+      billingSelections.push('WebPOS');
+    } else if (productKey) {
+      // For other statuses, keep product mark behavior.
+      billingSelections.push(payload.productName || 'WebPOS');
+    }
+
+    applyChecklistSelectionByLabel(
+      xmlDoc,
+      ['Billing Status:', 'Billing Status', 'Status:'],
+      billingSelections,
+      billingChecklistOptions,
+      { bold: true },
+    );
+
+    applyChecklistSelectionByLabel(
+      xmlDoc,
+      ['Support Type:', 'Support Type'],
+      payload.supportType,
+      supportChecklistOptions,
+      { bold: true },
+    );
+
+    tryFillByLabelVariants(['Product Name:', 'Product Name', 'Product:'], payload.productName, { bold: true });
 
     applyTemplateSectionValues(xmlDoc, payload);
 
@@ -6684,6 +7274,9 @@
         invoice: reportInvoiceInput ? reportInvoiceInput.value.trim() : '',
         client: reportClientInput ? reportClientInput.value.trim() : '',
         tsAssigned: reportTsAssignedInput ? reportTsAssignedInput.value.trim() : '',
+        billingStatus: getReportBillingStatusValue(),
+        supportType: getReportSupportTypeValue(),
+        productName: getReportProductNameValue(),
         title: reportTitleInput ? reportTitleInput.value.trim() : 'Status Report',
         concern: reportConcernInput ? String(reportConcernInput.value || '').replace(/\r/g, '') : '',
         activities: getActivitiesEditorText(),
@@ -6725,6 +7318,9 @@
             `Invoice: ${payload.invoice || '-'}`,
             `Client: ${payload.client || '-'}`,
             `TS Assigned: ${payload.tsAssigned || '-'}`,
+            `Billing Status: ${payload.billingStatus || '-'}`,
+            `Support Type: ${payload.supportType || '-'}`,
+            `Product Name: ${payload.productName || '-'}`,
             '',
             'Section Mapping:',
             `Concern/s: ${payload.concern || payload.title || '-'}`,
@@ -6762,6 +7358,21 @@
       if (reportInvoiceInput) reportInvoiceInput.value = '';
       if (reportClientInput) reportClientInput.value = '';
       if (reportTsAssignedInput) reportTsAssignedInput.value = '';
+      if (reportBillingStatusInput) reportBillingStatusInput.value = '';
+      if (reportBillingStatusCustomInput) {
+        reportBillingStatusCustomInput.value = '';
+        reportBillingStatusCustomInput.hidden = true;
+      }
+      if (reportSupportTypeInput) reportSupportTypeInput.value = '';
+      if (reportSupportTypeCustomInput) {
+        reportSupportTypeCustomInput.value = '';
+        reportSupportTypeCustomInput.hidden = true;
+      }
+      if (reportProductNameInput) reportProductNameInput.value = 'WebPOS';
+      if (reportProductNameCustomInput) {
+        reportProductNameCustomInput.value = '';
+        reportProductNameCustomInput.hidden = true;
+      }
       if (reportTitleInput) reportTitleInput.value = '';
       if (reportConcernInput) reportConcernInput.value = 'Ticket no. ';
       if (reportActivitiesEditor) reportActivitiesEditor.innerHTML = '';
@@ -6789,6 +7400,18 @@
         }
       }
     });
+  }
+
+  if (reportSupportTypeInput) {
+    reportSupportTypeInput.addEventListener('change', syncSupportTypeCustomVisibility);
+  }
+
+  if (reportBillingStatusInput) {
+    reportBillingStatusInput.addEventListener('change', syncBillingStatusCustomVisibility);
+  }
+
+  if (reportProductNameInput) {
+    reportProductNameInput.addEventListener('change', syncProductNameCustomVisibility);
   }
 
   if (activitiesBulletBtn) {

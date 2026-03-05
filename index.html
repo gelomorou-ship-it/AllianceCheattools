@@ -127,7 +127,7 @@
               <button type="button" class="feature-btn" id="generateDeleteSqlBtn">Generate DELETE SQL</button>
             </div>
             <div class="copy-code-row" id="copyMissingSqlRow" hidden>
-              <button type="button" class="copy-code-btn" id="copyMissingSqlBtn">Copy code</button>
+              <button type="button" class="copy-code-btn" id="copyMissingSqlBtn">Copy query</button>
             </div>
             <textarea id="sqlResultOutput" class="sql-output" readonly hidden></textarea>
           </section>
@@ -161,7 +161,7 @@
             <p class="feature-note" id="frecnoStatus">Generated output will appear here.</p>
             <p class="feature-note frecno-progress" id="frecnoProgress" hidden>Analyzing...</p>
             <div class="copy-code-row" id="copyFrecnoCodeRow" hidden>
-              <button type="button" class="copy-code-btn" id="copyFrecnoCodeBtn">Copy code</button>
+              <button type="button" class="copy-code-btn" id="copyFrecnoCodeBtn">Copy query</button>
             </div>
             <textarea id="frecnoOutput" class="sql-output frecno-output" readonly></textarea>
           </section>
@@ -177,7 +177,7 @@
         </div>
         <p class="feature-note">Organized reference scripts with highlighted titles.</p>
         <div class="copy-code-row">
-          <button type="button" class="copy-code-btn" id="copyAllScriptBtn">Copy code</button>
+          <button type="button" class="copy-code-btn" id="copyAllScriptBtn">Copy query</button>
         </div>
         <div id="allScriptOutput" class="result-output all-script-output"></div>
       </div>
@@ -205,7 +205,7 @@
           </section>
           <section class="missing-or-panel">
             <div class="copy-code-row" id="copyFrecnoListSqlRow" hidden>
-              <button type="button" class="copy-code-btn" id="copyFrecnoListSqlBtn">Copy code</button>
+              <button type="button" class="copy-code-btn" id="copyFrecnoListSqlBtn">Copy query</button>
             </div>
             <textarea id="frecnoListSqlOutput" class="sql-output" readonly></textarea>
           </section>
@@ -276,6 +276,58 @@
             
             <label class="frecno-label" for="reportTsAssignedInput">TS Assigned</label>
             <input type="text" id="reportTsAssignedInput" class="feature-file-input" placeholder="" />
+
+            <label class="frecno-label" for="reportBillingStatusInput">Billing Status</label>
+            <select id="reportBillingStatusInput" class="feature-file-input">
+              <option value="">Select billing status</option>
+              <option value="Billed">Billed</option>
+              <option value="Not Billed">Not Billed</option>
+              <option value="with APS">with APS</option>
+              <option value="Pending from previous task">Pending from previous task</option>
+              <option value="Warranty">Warranty</option>
+              <option value="__custom__">Custom...</option>
+            </select>
+            <input
+              type="text"
+              id="reportBillingStatusCustomInput"
+              class="feature-file-input"
+              placeholder="Type custom billing status"
+              hidden
+            />
+
+            <label class="frecno-label" for="reportSupportTypeInput">Support Type</label>
+            <select id="reportSupportTypeInput" class="feature-file-input">
+              <option value="">Select support type</option>
+              <option value="Offsite/Remote">Offsite/Remote</option>
+              <option value="Onsite">Onsite</option>
+              <option value="__custom__">Custom...</option>
+            </select>
+            <input
+              type="text"
+              id="reportSupportTypeCustomInput"
+              class="feature-file-input"
+              placeholder="Type custom support type"
+              hidden
+            />
+
+            <label class="frecno-label" for="reportProductNameInput">Product Name</label>
+            <select id="reportProductNameInput" class="feature-file-input">
+              <option value="WebPOS" selected>WebPOS</option>
+              <option value="POS V3">POS V3</option>
+              <option value="CheckOut">CheckOut</option>
+              <option value="UPOSweb">UPOSweb</option>
+              <option value="MRU">MRU</option>
+              <option value="CoCares">CoCares</option>
+              <option value="Portfolio - ERP/PY">Portfolio - ERP/PY</option>
+              <option value="__custom__">Custom...</option>
+            </select>
+            <input
+              type="text"
+              id="reportProductNameCustomInput"
+              class="feature-file-input"
+              placeholder="Type custom product name"
+              hidden
+            />
 
             <label class="frecno-label" for="reportTitleInput">Report Title</label>
             <input type="text" id="reportTitleInput" class="feature-file-input" placeholder="e.g. Status Report" />
