@@ -2,6 +2,8 @@
   const links = document.querySelectorAll('[data-view-link]');
   const views = document.querySelectorAll('.view[data-view]');
   const splashText = document.getElementById('transitionSplashText');
+  const buildVersionBadge = document.getElementById('buildVersionBadge');
+  const APP_BUILD_VERSION = '2026-03-05.1';
 
   const checkMissingOrBtn = document.getElementById('checkMissingOrBtn');
   const openGenerateFrecnoBtn = document.getElementById('openGenerateFrecnoBtn');
@@ -7984,6 +7986,12 @@
   const initial = window.location.hash.replace('#', '');
   const hasInitial = Array.from(views).some((view) => view.dataset.view === initial);
   setActiveView(hasInitial ? initial : 'home', false);
+
+  if (buildVersionBadge) {
+    const versionLabel = `Build ${APP_BUILD_VERSION}`;
+    buildVersionBadge.textContent = versionLabel;
+    buildVersionBadge.title = versionLabel;
+  }
 })();
 
 
