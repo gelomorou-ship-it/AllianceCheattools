@@ -111,6 +111,7 @@
   const activitiesEditorDialog = document.getElementById('activitiesEditorDialog');
   const closeActivitiesEditorBtn = document.getElementById('closeActivitiesEditorBtn');
   const okActivitiesEditorBtn = document.getElementById('okActivitiesEditorBtn');
+  const activitiesBoldBtn = document.getElementById('activitiesBoldBtn');
   const activitiesBulletBtn = document.getElementById('activitiesBulletBtn');
   const generateReportDocxBtn = document.getElementById('generateReportDocxBtn');
   const clearReportDocxBtn = document.getElementById('clearReportDocxBtn');
@@ -5412,22 +5413,122 @@
     if (!reportActivitiesEditor) return [];
 
     const blocks = [];
-    const pushText = (rawText, asBullet) => {
-      const lines = String(rawText || '')
-        .replace(/\u00a0/g, ' ')
-        .replace(/\r/g, '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-      lines.forEach((line) => {
-        blocks.push(asBullet ? { type: 'bullet', text: line } : { type: 'text', text: line });
+    const isBoldElement = (el) => {
+      if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+      const tag = String(el.tagName || '').toLowerCase();
+      if (tag === 'b' || tag === 'strong') return true;
+      const style = String(el.getAttribute('style') || '').toLowerCase();
+      return /font-weight\s*:\s*(bold|[6-9]00)/.test(style);
+    };
+
+    const pushRun = (runs, text, bold) => {
+      const normalized = String(text || '').replace(/\u00a0/g, ' ');
+      if (!normalized) return;
+      const prev = runs[runs.length - 1];
+      if (prev && !prev.break && !prev.imageNode && Boolean(prev.bold) === Boolean(bold)) {
+        prev.text += normalized;
+      } else {
+        runs.push({ text: normalized, bold: Boolean(bold) });
+      }
+    };
+
+    const collectRuns = (node, runs, inheritedBold = false) => {
+      if (!node) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        pushRun(runs, node.textContent || '', inheritedBold);
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+
+      const el = node;
+      const tag = String(el.tagName || '').toLowerCase();
+      if (tag === 'br') {
+        runs.push({ break: true });
+        return;
+      }
+      if (tag === 'img') {
+        runs.push({ imageNode: el });
+        return;
+      }
+      if (tag === 'a') {
+        const href = String(el.getAttribute('href') || '').trim();
+        const anchorRuns = [];
+        Array.from(el.childNodes).forEach((child) => collectRuns(child, anchorRuns, inheritedBold || isBoldElement(el)));
+        const text = anchorRuns
+          .filter((r) => !r.break && !r.imageNode)
+          .map((r) => String(r.text || ''))
+          .join('')
+          .trim();
+        const withHref = href && text && !text.includes(href)
+          ? `${text} (${href})`
+          : (text || href);
+        pushRun(runs, withHref, inheritedBold || isBoldElement(el));
+        return;
+      }
+      Array.from(el.childNodes).forEach((child) => collectRuns(child, runs, inheritedBold || isBoldElement(el)));
+    };
+
+    const pushImageBlock = (imageEl) => {
+      const src = String(imageEl && imageEl.getAttribute ? imageEl.getAttribute('src') || '' : '');
+      if (src.startsWith('data:image/')) {
+        blocks.push({
+          type: 'image',
+          image: {
+            src,
+            name: `activities_image_${blocks.length + 1}`,
+          },
+        });
+      } else if (src) {
+        blocks.push({ type: 'text', text: `[Image link: ${src}]` });
+      }
+    };
+
+    const pushRichLines = (runs, asBullet) => {
+      const lines = [];
+      let current = [];
+      runs.forEach((run) => {
+        if (run && run.break) {
+          lines.push(current);
+          current = [];
+          return;
+        }
+        if (run && run.imageNode) {
+          lines.push(current);
+          current = [];
+          pushImageBlock(run.imageNode);
+          return;
+        }
+        if (run && String(run.text || '').length > 0) {
+          current.push({ text: String(run.text || ''), bold: Boolean(run.bold) });
+        }
+      });
+      lines.push(current);
+
+      lines.forEach((lineRuns) => {
+        const cleaned = (lineRuns || [])
+          .map((r) => ({
+            text: String(r.text || '').replace(/\r/g, ''),
+            bold: Boolean(r.bold),
+          }))
+          .filter((r) => r.text.length > 0);
+        if (cleaned.length === 0) return;
+        blocks.push({
+          type: 'richText',
+          bullet: Boolean(asBullet),
+          runs: cleaned,
+        });
       });
     };
 
     const walk = (node, inBullet) => {
       if (!node) return;
       if (node.nodeType === Node.TEXT_NODE) {
-        pushText(node.textContent || '', inBullet);
+        const text = String(node.textContent || '').replace(/\u00a0/g, ' ');
+        if (text.trim()) {
+          blocks.push({ type: 'richText', bullet: Boolean(inBullet), runs: [{ text, bold: false }] });
+        }
         return;
       }
       if (node.nodeType !== Node.ELEMENT_NODE) {
@@ -5438,30 +5539,7 @@
       const tag = String(el.tagName || '').toLowerCase();
 
       if (tag === 'img') {
-        const src = String(el.getAttribute('src') || '');
-        if (src.startsWith('data:image/')) {
-          blocks.push({
-            type: 'image',
-            image: {
-              src,
-              name: `activities_image_${blocks.length + 1}`,
-            },
-          });
-        } else if (src) {
-          blocks.push({ type: 'text', text: `[Image link: ${src}]` });
-        }
-        return;
-      }
-
-      if (tag === 'a') {
-        const href = String(el.getAttribute('href') || '').trim();
-        const text = normalizeText(el.textContent || '');
-        const withHref = href && text && !text.includes(href)
-          ? `${text} (${href})`
-          : (text || href);
-        if (withHref) {
-          blocks.push(inBullet ? { type: 'bullet', text: withHref } : { type: 'text', text: withHref });
-        }
+        pushImageBlock(el);
         return;
       }
 
@@ -5476,20 +5554,9 @@
         return;
       }
 
-      if (tag === 'li') {
-        if (el.childNodes.length === 0) {
-          return;
-        }
-        Array.from(el.childNodes).forEach((child) => walk(child, true));
-        return;
-      }
-
-      if (tag === 'br') {
-        blocks.push(inBullet ? { type: 'bullet', text: '' } : { type: 'text', text: '' });
-        return;
-      }
-
-      Array.from(el.childNodes).forEach((child) => walk(child, inBullet));
+      const runs = [];
+      Array.from(el.childNodes).forEach((child) => collectRuns(child, runs, false));
+      pushRichLines(runs, tag === 'li' ? true : inBullet);
     };
 
     Array.from(reportActivitiesEditor.childNodes).forEach((node) => walk(node, false));
@@ -5497,6 +5564,9 @@
     return blocks.filter((block) => {
       if (!block) return false;
       if (block.type === 'image') return Boolean(block.image && block.image.src);
+      if (block.type === 'richText') {
+        return Array.isArray(block.runs) && block.runs.some((r) => String(r.text || '').trim().length > 0);
+      }
       return String(block.text || '').trim().length > 0;
     });
   }
@@ -5683,6 +5753,50 @@
     return p;
   }
 
+  function createTextRunNode(xmlDoc, textValue, options = {}) {
+    const isBold = Boolean(options.bold);
+    const r = xmlDoc.createElementNS(W_NS, 'w:r');
+    const rPr = xmlDoc.createElementNS(W_NS, 'w:rPr');
+    const rFonts = xmlDoc.createElementNS(W_NS, 'w:rFonts');
+    rFonts.setAttribute('w:ascii', 'Arial');
+    rFonts.setAttribute('w:hAnsi', 'Arial');
+    const sz = xmlDoc.createElementNS(W_NS, 'w:sz');
+    sz.setAttribute('w:val', '24');
+    const szCs = xmlDoc.createElementNS(W_NS, 'w:szCs');
+    szCs.setAttribute('w:val', '24');
+    rPr.appendChild(rFonts);
+    if (isBold) {
+      const b = xmlDoc.createElementNS(W_NS, 'w:b');
+      rPr.appendChild(b);
+    }
+    rPr.appendChild(sz);
+    rPr.appendChild(szCs);
+    const t = xmlDoc.createElementNS(W_NS, 'w:t');
+    t.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:space', 'preserve');
+    t.textContent = String(textValue || ' ');
+    r.appendChild(rPr);
+    r.appendChild(t);
+    return r;
+  }
+
+  function createParagraphFromRuns(xmlDoc, runs, options = {}) {
+    const p = xmlDoc.createElementNS(W_NS, 'w:p');
+    const runList = Array.isArray(runs) ? runs : [];
+    if (runList.length === 0) {
+      p.appendChild(createTextRunNode(xmlDoc, ' ', { bold: Boolean(options.bold) }));
+      return p;
+    }
+    runList.forEach((run) => {
+      const text = String(run && run.text ? run.text : '');
+      if (!text) return;
+      p.appendChild(createTextRunNode(xmlDoc, text, { bold: Boolean(options.bold) || Boolean(run && run.bold) }));
+    });
+    if (!p.childNodes || p.childNodes.length === 0) {
+      p.appendChild(createTextRunNode(xmlDoc, ' ', { bold: Boolean(options.bold) }));
+    }
+    return p;
+  }
+
   function ensureCellHasTextNode(cellNode, xmlDoc) {
     const textNodes = getWNodeList(cellNode, 't');
     if (textNodes.length > 0) return textNodes;
@@ -5704,7 +5818,16 @@
     while (cellNode.firstChild) {
       cellNode.removeChild(cellNode.firstChild);
     }
-    cellNode.appendChild(createMinimalTextParagraph(xmlDoc, String(value || ' '), { bold: isBold }));
+    const lines = String(value || '')
+      .replace(/\r/g, '')
+      .split('\n');
+    if (lines.length === 0) {
+      cellNode.appendChild(createMinimalTextParagraph(xmlDoc, ' ', { bold: isBold }));
+      return true;
+    }
+    lines.forEach((line) => {
+      cellNode.appendChild(createMinimalTextParagraph(xmlDoc, String(line), { bold: isBold }));
+    });
     return true;
   }
 
@@ -5777,7 +5900,11 @@
       if (!text.includes(labelText)) continue;
       const tc = getClosestByLocalName(textNodes[i], 'tc');
       if (tc) {
-        return setCellText(tc, `${labelText} ${String(value).trim()}`, xmlDoc, options);
+        const rawValue = String(value || '').replace(/\r/g, '');
+        const lines = rawValue.split('\n');
+        const firstLine = String(lines.shift() || '').trim();
+        const merged = [`${labelText} ${firstLine}`].concat(lines).join('\n');
+        return setCellText(tc, merged, xmlDoc, options);
       }
     }
     return false;
@@ -5845,6 +5972,22 @@
           }
           hasContent = true;
         });
+        return;
+      }
+      if (block.type === 'richText') {
+        const runs = Array.isArray(block.runs) ? block.runs : [];
+        const plain = runs.map((r) => String(r && r.text ? r.text : '')).join('').trim();
+        const isTsActivityHeading = /^TS\s+ACTIVITY\b/i.test(plain);
+        if (Boolean(block.bullet)) {
+          const bulletRuns = [{ text: '\u2022 ', bold: false }].concat(runs);
+          cellNode.appendChild(createParagraphFromRuns(xmlDoc, bulletRuns, { bold: isTsActivityHeading }));
+        } else {
+          cellNode.appendChild(createParagraphFromRuns(xmlDoc, runs, { bold: isTsActivityHeading }));
+        }
+        if (isTsActivityHeading) {
+          cellNode.appendChild(createMinimalTextParagraph(xmlDoc, ' ', { bold: false }));
+        }
+        hasContent = true;
         return;
       }
       if (block.type === 'bullet') {
@@ -6539,14 +6682,14 @@
         client: reportClientInput ? reportClientInput.value.trim() : '',
         tsAssigned: reportTsAssignedInput ? reportTsAssignedInput.value.trim() : '',
         title: reportTitleInput ? reportTitleInput.value.trim() : 'Status Report',
-        concern: reportConcernInput ? reportConcernInput.value.trim() : '',
+        concern: reportConcernInput ? String(reportConcernInput.value || '').replace(/\r/g, '') : '',
         activities: getActivitiesEditorText(),
         activitiesImages: getActivitiesEditorImages(),
         activitiesBlocks: getActivitiesBlocksFromEditor(),
-        rootCause: reportRootCauseInput ? reportRootCauseInput.value.trim() : '',
-        preventiveAction: reportPreventiveInput ? reportPreventiveInput.value.trim() : '',
-        nextSteps: reportNextStepsInput ? reportNextStepsInput.value.trim() : '',
-        currentStatus: reportCurrentStatusInput ? reportCurrentStatusInput.value.trim() : '',
+        rootCause: reportRootCauseInput ? String(reportRootCauseInput.value || '').replace(/\r/g, '') : '',
+        preventiveAction: reportPreventiveInput ? String(reportPreventiveInput.value || '').replace(/\r/g, '') : '',
+        nextSteps: reportNextStepsInput ? String(reportNextStepsInput.value || '').replace(/\r/g, '') : '',
+        currentStatus: reportCurrentStatusInput ? String(reportCurrentStatusInput.value || '').replace(/\r/g, '') : '',
         body: getActivitiesEditorText(),
       };
       if (generateReportDocxBtn) generateReportDocxBtn.disabled = true;
@@ -6648,6 +6791,12 @@
   if (activitiesBulletBtn) {
     activitiesBulletBtn.addEventListener('click', () => {
       applyActivitiesBulletsByLine();
+    });
+  }
+
+  if (activitiesBoldBtn) {
+    activitiesBoldBtn.addEventListener('click', () => {
+      applyActivitiesEditorCommand('bold');
     });
   }
 
