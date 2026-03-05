@@ -3744,8 +3744,11 @@
       }
       row[sumColIndex] = sumValue;
       row[separatorColIndex] = '';
-      row[eodFieldColIndex] = eodField;
-      row[eodFirstValueColIndex] = eodValue;
+      const shouldHideTopEodField = Array.isArray(eodGrid.rows)
+        && eodGrid.rows.length > 0
+        && (eodField === 'CCCODE' || eodField === 'TER_NO');
+      row[eodFieldColIndex] = shouldHideTopEodField ? '' : eodField;
+      row[eodFirstValueColIndex] = shouldHideTopEodField ? '' : eodValue;
       aoa.push(row);
       fieldRowMap.set(field, rowIndex);
       if (productRawFields.has(field)) {
