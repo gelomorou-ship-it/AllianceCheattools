@@ -2629,7 +2629,13 @@
           .map((field) => `${field} = ${formatTxnAmount(getAyalaNumericFieldValue(record, field))}`)
           .join(', ');
         const paymentTotalText = paymentTotalFields
-          .map((field) => `${field} = ${formatTxnAmount(getAyalaAdjustedPaymentFieldValue(record, field))}`)
+          .map((field) => {
+            if (field === 'GC_EXCESS') {
+              // Show raw GC_EXCESS in report details so checker and text output align visually.
+              return `${field} = ${formatTxnAmount(getAyalaNumericFieldValue(record, field))}`;
+            }
+            return `${field} = ${formatTxnAmount(getAyalaAdjustedPaymentFieldValue(record, field))}`;
+          })
           .join(', ');
         lines.push(
           `TRANSACTION NO (${txNo}), TERMINAL NO (${terNo}), `
