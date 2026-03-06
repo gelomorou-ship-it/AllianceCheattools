@@ -2306,7 +2306,16 @@
       .map((field) => `${field} = ${formatAyalaAmount(result.paymentDailyBreakdown[field] || 0)}`)
       .join(', ');
     const paymentTransactionText = paymentOrder
-      .map((field) => `${field === 'OTHER_SLS' ? 'OTHERSL_SLS' : field} = ${formatAyalaAmount(result.paymentTransactionBreakdown[field] || 0)}`)
+      .map((field) => {
+        const fieldName = field === 'OTHER_SLS' ? 'OTHERSL_SLS' : field;
+        if (field === 'GC_SLS') {
+          const adjusted = roundAyalaAmount(result.paymentTransactionBreakdown[field] || 0);
+          const gcExcess = roundAyalaAmount(result.paymentTransactionBreakdown.GC_EXCESS || 0);
+          const raw = roundAyalaAmount(adjusted + gcExcess);
+          return `${fieldName} = ${formatAyalaAmount(raw)} (ADJ ${formatAyalaAmount(adjusted)})`;
+        }
+        return `${fieldName} = ${formatAyalaAmount(result.paymentTransactionBreakdown[field] || 0)}`;
+      })
       .join(', ');
     const paymentFieldDiffLines = paymentOrder
       .map((field) => {
@@ -2630,6 +2639,11 @@
           .join(', ');
         const paymentTotalText = paymentTotalFields
           .map((field) => {
+            if (field === 'GC_SLS') {
+              const rawGcSls = getAyalaNumericFieldValue(record, 'GC_SLS');
+              const adjustedGcSls = getAyalaAdjustedPaymentFieldValue(record, 'GC_SLS');
+              return `${field} = ${formatTxnAmount(rawGcSls)} (ADJ ${formatTxnAmount(adjustedGcSls)})`;
+            }
             if (field === 'GC_EXCESS') {
               // Show raw GC_EXCESS in report details so checker and text output align visually.
               return `${field} = ${formatTxnAmount(getAyalaNumericFieldValue(record, field))}`;
