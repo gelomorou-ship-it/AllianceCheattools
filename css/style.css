@@ -237,6 +237,7 @@ body.is-switching .transition-splash {
   padding: clamp(18px, 2.2vw, 28px);
 }
 
+
 .home-copy {
   width: 100%;
   max-width: clamp(480px, 40vw, 680px);
@@ -460,7 +461,7 @@ body.is-switching .transition-splash {
   left: 50%;
   transform: translateX(-50%);
   z-index: 55;
-  width: min(880px, calc(100vw - 56px));
+  width: min(92vw, 1300px);
   display: block;
   margin: 0;
   pointer-events: none;
@@ -732,7 +733,7 @@ body.is-switching .transition-splash {
   background: rgba(3, 8, 18, 0.62);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
-  padding: clamp(8px, 1.2vw, 16px);
+  padding: clamp(10px, 1.6vw, 24px);
 }
 
 .modal-overlay[hidden] {
@@ -740,16 +741,45 @@ body.is-switching .transition-splash {
 }
 
 .modal-card {
-  width: min(860px, calc(100vw - 2 * clamp(8px, 1.2vw, 16px)));
-  max-height: calc(100svh - 2 * clamp(8px, 1.2vw, 16px));
+  width: min(94vw, 1400px);
+  max-height: calc(100svh - 2 * clamp(10px, 1.6vw, 24px));
   overflow-y: auto;
+  overflow-x: hidden;
   border-radius: clamp(12px, 1.2vw, 16px);
   padding: clamp(12px, 1.4vw, 18px);
+  color: #eaf1ff;
   background: rgba(11, 19, 37, 0.76);
   border: 1px solid rgba(154, 191, 255, 0.34);
   box-shadow: 0 22px 46px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+.modal-card p,
+.modal-card label,
+.modal-card .feature-note,
+.modal-card .analyze-status,
+.modal-card .missing-summary p,
+.modal-card .sql-output,
+.modal-card .result-output,
+.modal-card .output-log {
+  font-size: clamp(0.78rem, 0.55vw + 0.5rem, 0.98rem);
+  line-height: 1.5;
+  color: #dbe7ff;
+}
+
+.note-warning {
+  color: #ffd27a;
+  font-weight: 500;
+}
+
+.home-copy p.note-warning,
+.tool-card p.note-warning,
+.feature-panel p.note-warning,
+.modal-card p.note-warning,
+.modal-card .feature-note.note-warning {
+  color: #ffd27a;
+  font-weight: 500;
 }
 
 #missingOrModal .modal-card {
@@ -843,11 +873,11 @@ body.is-switching .transition-splash {
 }
 
 .modal-card--wide {
-  width: min(1050px, calc(100vw - 2 * clamp(8px, 1.2vw, 16px)));
+  width: min(96vw, 1700px);
 }
 
 .modal-card--ayala {
-  width: min(860px, 96vw);
+  width: min(94vw, 1400px);
 }
 
 #ayalaModal .modal-card--ayala h3 {
@@ -885,8 +915,8 @@ body.is-switching .transition-splash {
 }
 
 #frecnoListSqlModal .modal-card {
-  width: min(1120px, calc(100vw - 2 * clamp(8px, 1.2vw, 16px)));
-  max-height: calc(100svh - 2 * clamp(8px, 1.2vw, 16px));
+  width: min(96vw, 1700px);
+  max-height: calc(100svh - 2 * clamp(10px, 1.6vw, 24px));
 }
 
 #frecnoListSqlModal .missing-or-layout {
@@ -930,11 +960,11 @@ body.is-switching .transition-splash {
 
 @media (max-width: 1280px) {
   .modal-card--wide {
-    width: min(980px, calc(100vw - 2 * clamp(8px, 1.2vw, 16px)));
+    width: min(94vw, 1200px);
   }
 
   #frecnoListSqlModal .modal-card {
-    width: min(980px, calc(100vw - 2 * clamp(8px, 1.2vw, 16px)));
+    width: min(94vw, 1200px);
   }
 }
 

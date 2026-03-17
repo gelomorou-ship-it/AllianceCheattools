@@ -1341,6 +1341,11 @@
   const AYALA_DISCREPANCY_TOLERANCE = 1.0;
   // Temporary safety switch: keep raw hourly transactions unchanged (no move-pairs).
   const AYALA_MOVE_PAIRS_ENABLED = true;
+  // Make refund pairing stricter to avoid mismatching originals.
+  const AYALA_REFUND_PAIR_STRICT = true;
+  const AYALA_REFUND_PAIR_AMBIGUOUS_SCORE_GAP = 20;
+  const AYALA_REFUND_PAIR_AMBIGUOUS_TXN_GAP = 1;
+  const AYALA_REPORT_UNMATCHED_REFUND = false;
   // Keep full total validation checks. NO_TRN is included as an additional line.
   const AYALA_TOTAL_VALIDATION_NO_TRN_ONLY = false;
 
@@ -1485,15 +1490,25 @@
       maxTxnGap = 80,
       requireDetailAnchor = true,
       minScore = 80,
+      strict = AYALA_REFUND_PAIR_STRICT,
+      requireDateMatch = AYALA_REFUND_PAIR_STRICT,
     } = options;
     const refundRecord = refund && refund.record ? refund.record : null;
     const origRecord = orig && orig.record ? orig.record : null;
+    const refundDate = String(refundRecord && refundRecord.TRN_DATE || '').trim();
+    const origDate = String(origRecord && origRecord.TRN_DATE || '').trim();
+    if (requireDateMatch && refundDate && origDate && refundDate !== origDate) {
+      return { eligible: false, score: -9999, txnGap: 999999 };
+    }
     const refundItem = String(refundRecord && refundRecord.ITEMCODE || '').trim().toUpperCase();
     const origItem = String(origRecord && origRecord.ITEMCODE || '').trim().toUpperCase();
     const refundPrice = Math.abs(parseNumericAyala(refundRecord && refundRecord.PRICE));
     const origPrice = Math.abs(parseNumericAyala(origRecord && origRecord.PRICE));
     const refundQty = Math.abs(parseNumericAyala(refundRecord && refundRecord.QTY));
     const origQty = Math.abs(parseNumericAyala(origRecord && origRecord.QTY));
+    const hasDetailAnchor = Boolean(refundItem || refundPrice > 0 || refundQty > 0);
+    const effectiveRequireDetailAnchor = requireDetailAnchor && hasDetailAnchor;
+    const effectiveMaxTxnGap = hasDetailAnchor ? maxTxnGap : Math.min(maxTxnGap, 5);
     const refundGross = Math.abs(parseNumericAyala(refundRecord && refundRecord.GROSS_SLS));
     const origGross = Math.abs(parseNumericAyala(origRecord && origRecord.GROSS_SLS));
     const refundVatable = Math.abs(parseNumericAyala(refundRecord && refundRecord.VATABLE_SLS));
@@ -1501,10 +1516,42 @@
     const refundVat = Math.abs(parseNumericAyala(refundRecord && refundRecord.VAT_AMNT));
     const origVat = Math.abs(parseNumericAyala(origRecord && origRecord.VAT_AMNT));
     const refundDerived = getAyalaRefundDerivedAmounts(refundRecord);
+    if (strict) {
+      const strictNumericFields = [
+        'GROSS_SLS',
+        'VAT_AMNT',
+        'VATABLE_SLS',
+        'NONVAT_SLS',
+        'VATEXEMPT_SLS',
+        'VATEXEMPT_AMNT',
+        'LOCAL_TAX',
+        'SCHRGE_AMT',
+        'OTHER_SCHR',
+        'PRICE',
+        'QTY',
+      ];
+      for (let i = 0; i < strictNumericFields.length; i += 1) {
+        const field = strictNumericFields[i];
+        const refundValue = Math.abs(parseNumericAyala(refundRecord && refundRecord[field]));
+        if (refundValue <= AYALA_DISCREPANCY_TOLERANCE) {
+          continue;
+        }
+        const origValue = Math.abs(parseNumericAyala(origRecord && origRecord[field]));
+        if (!isSameAyalaAmount(refundValue, origValue)) {
+          return { eligible: false, score: -9999, txnGap: 999999 };
+        }
+      }
+      if (refundItem && origItem && refundItem !== origItem) {
+        return { eligible: false, score: -9999, txnGap: 999999 };
+      }
+      if (refundItem && !origItem) {
+        return { eligible: false, score: -9999, txnGap: 999999 };
+      }
+    }
     const txnGap = Number.isFinite(orig && orig.txnNum) && Number.isFinite(refund && refund.txnNum)
       ? Math.abs(refund.txnNum - orig.txnNum)
       : 999999;
-    if (txnGap > maxTxnGap) {
+    if (txnGap > effectiveMaxTxnGap) {
       return { eligible: false, score: -9999, txnGap };
     }
 
@@ -1521,7 +1568,7 @@
     if (!strongAmountMatch) {
       return { eligible: false, score: -9999, txnGap };
     }
-    if (requireDetailAnchor && !detailAnchorMatch) {
+    if (effectiveRequireDetailAnchor && !detailAnchorMatch) {
       return { eligible: false, score: -9999, txnGap };
     }
 
@@ -1596,8 +1643,16 @@
     const refundMatches = [];
     const unmatchedRefunds = [];
 
+    const hasRefundDetailAnchor = (record) => {
+      const item = String(record && record.ITEMCODE || '').trim();
+      const price = Math.abs(parseNumericAyala(record && record.PRICE));
+      const qty = Math.abs(parseNumericAyala(record && record.QTY));
+      return Boolean(item) || price > 0 || qty > 0;
+    };
+
     refundEntries.forEach((refund) => {
-      const scoredCandidates = originalEntries
+      const refundHasDetail = hasRefundDetailAnchor(refund.record);
+      let scoredCandidates = originalEntries
         .filter((orig) => {
           if (usedOriginalKeys.has(orig.key)) {
             return false;
@@ -1627,24 +1682,76 @@
           return a.txnGap - b.txnGap;
         });
 
+      if (!scoredCandidates.length && !refundHasDetail) {
+        const refundDerived = getAyalaRefundDerivedAmounts(refund.record);
+        const refundGross = refundDerived.gross;
+        const fallbackCandidates = originalEntries
+          .filter((orig) => {
+            if (usedOriginalKeys.has(orig.key)) {
+              return false;
+            }
+            const origTerKey = normalizeAyalaTerminalKey(orig.ter || '-');
+            const refundTerKey = normalizeAyalaTerminalKey(refund.ter || '-');
+            if (origTerKey !== refundTerKey) {
+              return false;
+            }
+            if (Number.isFinite(orig.txnNum) && Number.isFinite(refund.txnNum)) {
+              if (orig.txnNum > refund.txnNum) {
+                return false;
+              }
+              const gap = Math.abs(refund.txnNum - orig.txnNum);
+              if (gap > 5) {
+                return false;
+              }
+            }
+            const origGross = Math.abs(parseNumericAyala(orig.record.GROSS_SLS));
+            return refundGross > 0 && isSameAyalaAmount(refundGross, origGross);
+          })
+          .sort((a, b) => {
+            const gapA = Math.abs((refund.txnNum || 0) - (a.txnNum || 0));
+            const gapB = Math.abs((refund.txnNum || 0) - (b.txnNum || 0));
+            if (gapA !== gapB) return gapA - gapB;
+            return 0;
+          });
+        scoredCandidates = fallbackCandidates.map((orig) => ({
+          orig,
+          score: 0,
+          txnGap: Math.abs((refund.txnNum || 0) - (orig.txnNum || 0)),
+          eligible: true,
+        }));
+      }
+
       const best = scoredCandidates[0];
       if (!best) {
         unmatchedRefunds.push(refund);
         return;
       }
+      const second = scoredCandidates[1];
+      if (second && refundHasDetail) {
+        const scoreGap = best.score - second.score;
+        const txnGapDiff = Math.abs(best.txnGap - second.txnGap);
+        if (scoreGap < AYALA_REFUND_PAIR_AMBIGUOUS_SCORE_GAP && txnGapDiff <= AYALA_REFUND_PAIR_AMBIGUOUS_TXN_GAP) {
+          unmatchedRefunds.push(refund);
+          return;
+        }
+      }
       usedOriginalKeys.add(best.orig.key);
       refundMatches.push({ refund, original: best.orig });
     });
 
+    const pairSource = [
+      ...refundMatches,
+      ...unmatchedRefunds.map((refund) => ({ refund, original: null })),
+    ];
     const movedTxnKeys = new Set();
-    refundMatches.forEach((pair) => {
-      movedTxnKeys.add(pair.refund.key);
-      movedTxnKeys.add(pair.original.key);
+    pairSource.forEach((pair) => {
+      if (pair && pair.refund && pair.refund.key) {
+        movedTxnKeys.add(pair.refund.key);
+      }
+      if (pair && pair.original && pair.original.key) {
+        movedTxnKeys.add(pair.original.key);
+      }
     });
-
-    const pairSource = refundMatches.length > 0
-      ? refundMatches
-      : unmatchedRefunds.map((refund) => ({ refund, original: null }));
 
     return {
       refundEntries,
@@ -1833,7 +1940,7 @@
     const APPLY_MOVE_PAIR_ADJUSTMENTS_IN_VALIDATION = true;
     const movedTxnKeysForValidation = APPLY_MOVE_PAIR_ADJUSTMENTS_IN_VALIDATION
       ? new Set(
-        (refundPlan.refundMatches || []).flatMap((pair) => ([
+        (refundPlan.pairSource || []).flatMap((pair) => ([
           String(pair && pair.refund ? pair.refund.key : '').trim(),
           String(pair && pair.original ? pair.original.key : '').trim(),
         ])).filter((key) => key && key !== '|')
@@ -1854,15 +1961,20 @@
     ];
     const movedOriginalGrossTotal = APPLY_MOVE_PAIR_ADJUSTMENTS_IN_VALIDATION
       ? roundAyalaAmount(
-        (refundPlan.refundMatches || []).reduce(
-          (acc, pair) => acc + parseNumericAyala(pair && pair.original ? pair.original.record.GROSS_SLS : 0),
-          0
-        )
+        (refundPlan.pairSource || []).reduce((acc, pair) => {
+          if (pair && pair.original) {
+            return acc + parseNumericAyala(pair.original.record.GROSS_SLS);
+          }
+          if (pair && pair.refund) {
+            return acc + getAyalaRefundDerivedAmounts(pair.refund.record).gross;
+          }
+          return acc;
+        }, 0)
       )
       : 0;
     const movedRefundTotal = APPLY_MOVE_PAIR_ADJUSTMENTS_IN_VALIDATION
       ? roundAyalaAmount(
-        (refundPlan.refundMatches || []).reduce(
+        (refundPlan.pairSource || []).reduce(
           (acc, pair) => acc + parseNumericAyala(pair && pair.refund ? pair.refund.record.REFUND_AMT : 0),
           0
         )
@@ -1882,20 +1994,31 @@
       refundPlan.pairSource.forEach((pair) => {
         const refund = pair.refund;
         const original = pair.original;
+        const hasOriginal = Boolean(original);
         adjustmentFields.forEach((field) => {
+          if (!hasOriginal && field !== 'REFUND_AMT') {
+            return;
+          }
           const delta = parseNumericAyala(refund.record[field]) - parseNumericAyala(original ? original.record[field] : 0);
           hourlyAdjustByField[field] += delta;
         });
-        paymentAdjustmentFields.forEach((field) => {
-          const delta = getAyalaAdjustedPaymentFieldValue(refund.record, field)
-            + getAyalaAdjustedPaymentFieldValue(original ? original.record : null, field);
-          paymentAdjustByField[field] += delta;
-        });
-        const terKey = String(refund.ter || '-');
-        terminalGrossAdjustments.set(
-          terKey,
-          (terminalGrossAdjustments.get(terKey) || 0) + parseNumericAyala(original ? original.record.GROSS_SLS : 0)
-        );
+        if (original) {
+          paymentAdjustmentFields.forEach((field) => {
+            const delta = getAyalaAdjustedPaymentFieldValue(refund.record, field)
+              + getAyalaAdjustedPaymentFieldValue(original ? original.record : null, field);
+            paymentAdjustByField[field] += delta;
+          });
+        }
+        const grossAdjust = original
+          ? parseNumericAyala(original.record.GROSS_SLS)
+          : getAyalaRefundDerivedAmounts(refund.record).gross;
+        if (Number.isFinite(grossAdjust) && !isSameAyalaAmount(grossAdjust, 0)) {
+          const terKey = String(refund.ter || '-');
+          terminalGrossAdjustments.set(
+            terKey,
+            (terminalGrossAdjustments.get(terKey) || 0) + grossAdjust
+          );
+        }
       });
     }
 
@@ -2336,7 +2459,7 @@
     const hasMissingGroups = result.missingInEod.length > 0 || result.missingInHourly.length > 0;
     const hasDuplicateTransactions = (result.duplicateTransactions || []).length > 0;
     const unmatchedRefunds = Array.isArray(result.unmatchedRefunds) ? result.unmatchedRefunds : [];
-    const hasUnmatchedRefunds = unmatchedRefunds.length > 0;
+    const hasUnmatchedRefunds = AYALA_REPORT_UNMATCHED_REFUND && unmatchedRefunds.length > 0;
     const hasTotalDiscrepancy = AYALA_TOTAL_VALIDATION_NO_TRN_ONLY
       ? !noTrnMatch
       : (
@@ -2435,7 +2558,7 @@
           );
         });
       }
-      if (hasUnmatchedRefunds) {
+      if (AYALA_REPORT_UNMATCHED_REFUND && hasUnmatchedRefunds) {
         lines.push(
           `Cross Validation, Discrepancy (${unmatchedRefunds.length}) UNMATCHED REFUND transaction(s) detected in CSV Hourly.`
         );
@@ -2506,6 +2629,15 @@
           : '';
         return `TERMINAL ${terminal.terNo}: ${grossText}, ${epayText}, ${noTrnText}${duplicateText} (Hourly NO_TRN ${terminal.hourlyTxn}, EOD NO_TRN ${terminal.eodNoTrn})`;
       });
+    if (lines.length === 0) {
+      if (AYALA_TOTAL_VALIDATION_NO_TRN_ONLY) {
+        lines.push(`${headerPrefix}NO_TRN MATCH (Hourly ${result.totals.hourlyTxnCount}, EOD ${result.eodSummary.noTrn})`);
+      } else {
+        lines.push(`${headerPrefix}No discrepancy found between CSV Hourly totals and EOD totals.`);
+        lines.push(`NO_TRN MATCH (Hourly ${result.totals.hourlyTxnCount}, EOD ${result.eodSummary.noTrn})`);
+      }
+    }
+
     if (terminalLines.length > 0) {
       lines.push('');
       lines.push('[Per Terminal Summary]');
@@ -3656,8 +3788,16 @@
     const usedOriginalKeys = new Set();
     const refundMatches = [];
     const unmatchedRefunds = [];
+    const hasRefundDetailAnchor = (record) => {
+      const item = String(record && record.ITEMCODE || '').trim();
+      const price = Math.abs(parseNumericAyala(record && record.PRICE));
+      const qty = Math.abs(parseNumericAyala(record && record.QTY));
+      return Boolean(item) || price > 0 || qty > 0;
+    };
+
     refundEntries.forEach((refund) => {
-      const scoredCandidates = originalEntries
+      const refundHasDetail = hasRefundDetailAnchor(refund.record);
+      let scoredCandidates = originalEntries
         .filter((orig) => {
           if (usedOriginalKeys.has(orig.key)) {
             return false;
@@ -3689,10 +3829,58 @@
           return a.txnGap - b.txnGap;
         });
 
+      if (!scoredCandidates.length && !refundHasDetail) {
+        const refundDerived = getAyalaRefundDerivedAmounts(refund.record);
+        const refundGross = refundDerived.gross;
+        const fallbackCandidates = originalEntries
+          .filter((orig) => {
+            if (usedOriginalKeys.has(orig.key)) {
+              return false;
+            }
+            const origTerKey = normalizeAyalaTerminalKey(orig.ter || '-');
+            const refundTerKey = normalizeAyalaTerminalKey(refund.ter || '-');
+            if (origTerKey !== refundTerKey) {
+              return false;
+            }
+            if (Number.isFinite(orig.txnNum) && Number.isFinite(refund.txnNum)) {
+              if (orig.txnNum > refund.txnNum) {
+                return false;
+              }
+              const gap = Math.abs(refund.txnNum - orig.txnNum);
+              if (gap > 5) {
+                return false;
+              }
+            }
+            const origGross = Math.abs(parseNumericAyala(orig.record.GROSS_SLS));
+            return refundGross > 0 && isSameAyalaAmount(refundGross, origGross);
+          })
+          .sort((a, b) => {
+            const gapA = Math.abs((refund.txnNum || 0) - (a.txnNum || 0));
+            const gapB = Math.abs((refund.txnNum || 0) - (b.txnNum || 0));
+            if (gapA !== gapB) return gapA - gapB;
+            return 0;
+          });
+        scoredCandidates = fallbackCandidates.map((orig) => ({
+          orig,
+          score: 0,
+          txnGap: Math.abs((refund.txnNum || 0) - (orig.txnNum || 0)),
+          eligible: true,
+        }));
+      }
+
       const best = scoredCandidates[0];
       if (!best) {
         unmatchedRefunds.push(refund);
         return;
+      }
+      const second = scoredCandidates[1];
+      if (second && refundHasDetail) {
+        const scoreGap = best.score - second.score;
+        const txnGapDiff = Math.abs(best.txnGap - second.txnGap);
+        if (scoreGap < AYALA_REFUND_PAIR_AMBIGUOUS_SCORE_GAP && txnGapDiff <= AYALA_REFUND_PAIR_AMBIGUOUS_TXN_GAP) {
+          unmatchedRefunds.push(refund);
+          return;
+        }
       }
 
       usedOriginalKeys.add(best.orig.key);
@@ -3700,11 +3888,19 @@
     });
 
     const movedTxnKeys = new Set();
-    // Move only paired transactions (original + refund) out of main hourly matrix.
+    const pairSource = [
+      ...refundMatches,
+      ...unmatchedRefunds.map((refund) => ({ refund, original: null })),
+    ];
+    // Move paired transactions (original + refund) and unmatched refunds out of main hourly matrix.
     if (AYALA_MOVE_PAIRS_ENABLED) {
-      refundMatches.forEach((pair) => {
-        movedTxnKeys.add(pair.refund.key);
-        movedTxnKeys.add(pair.original.key);
+      pairSource.forEach((pair) => {
+        if (pair && pair.refund && pair.refund.key) {
+          movedTxnKeys.add(pair.refund.key);
+        }
+        if (pair && pair.original && pair.original.key) {
+          movedTxnKeys.add(pair.original.key);
+        }
       });
     }
     const hasRefundScenario = AYALA_MOVE_PAIRS_ENABLED && refundEntries.length > 0;
@@ -3715,29 +3911,41 @@
       : ['GROSS_SLS', 'VAT_AMNT', 'VATABLE_SLS', 'NONVAT_SLS', 'VATEXEMPT_SLS', 'VATEXEMPT_AMNT', 'LOCAL_TAX', 'PWD_DISC', 'SNRCIT_DISC', 'EMPLO_DISC', 'AYALA_DISC', 'STORE_DISC', 'OTHER_DISC', 'REFUND_AMT', 'SCHRGE_AMT', 'OTHER_SCHR'];
     const movedOriginalGrossTotal = AYALA_MOVE_PAIRS_ENABLED
       ? roundAyalaAmount(
-        refundMatches.reduce((acc, pair) => acc + parseNumericAyala(pair.original ? pair.original.record.GROSS_SLS : 0), 0)
+        pairSource.reduce((acc, pair) => {
+          if (pair && pair.original) {
+            return acc + parseNumericAyala(pair.original.record.GROSS_SLS);
+          }
+          if (pair && pair.refund) {
+            return acc + getAyalaRefundDerivedAmounts(pair.refund.record).gross;
+          }
+          return acc;
+        }, 0)
       )
       : 0;
     const movedRefundTotal = AYALA_MOVE_PAIRS_ENABLED
       ? roundAyalaAmount(
-        refundMatches.reduce((acc, pair) => acc + parseNumericAyala(pair.refund.record.REFUND_AMT), 0)
+        pairSource.reduce((acc, pair) => acc + parseNumericAyala(pair.refund.record.REFUND_AMT), 0)
       )
       : 0;
     const terminalMovedOriginalGross = new Map();
     const terminalMovedRefund = new Map();
     if (AYALA_MOVE_PAIRS_ENABLED) {
-      refundMatches.forEach((pair) => {
+      pairSource.forEach((pair) => {
         const terKey = normalizeAyalaTerminalKey(
           (pair && pair.refund && pair.refund.ter)
           || (pair && pair.original && pair.original.ter)
           || '-'
         );
-        const originalGross = parseNumericAyala(pair && pair.original ? pair.original.record.GROSS_SLS : 0);
+        const originalGross = pair && pair.original
+          ? parseNumericAyala(pair.original.record.GROSS_SLS)
+          : (pair && pair.refund ? getAyalaRefundDerivedAmounts(pair.refund.record).gross : 0);
         const refundAmount = parseNumericAyala(pair && pair.refund ? pair.refund.record.REFUND_AMT : 0);
-        terminalMovedOriginalGross.set(
-          terKey,
-          roundAyalaAmount((terminalMovedOriginalGross.get(terKey) || 0) + originalGross)
-        );
+        if (Number.isFinite(originalGross) && !isSameAyalaAmount(originalGross, 0)) {
+          terminalMovedOriginalGross.set(
+            terKey,
+            roundAyalaAmount((terminalMovedOriginalGross.get(terKey) || 0) + originalGross)
+          );
+        }
         terminalMovedRefund.set(
           terKey,
           roundAyalaAmount((terminalMovedRefund.get(terKey) || 0) + refundAmount)
@@ -3758,6 +3966,9 @@
     });
     if (AYALA_MOVE_PAIRS_ENABLED && refundMatches.length > 0) {
       refundMatches.forEach((pair) => {
+        if (!pair || !pair.original) {
+          return;
+        }
         paymentAdjustmentFields.forEach((field) => {
           movedPaymentAdjustByField[field] += getAyalaAdjustedPaymentFieldValue(pair.refund.record, field)
             + getAyalaAdjustedPaymentFieldValue(pair.original ? pair.original.record : null, field);
@@ -3931,9 +4142,7 @@
     let refundMatrixEndCol = eodBlockEndColIndex;
     const adjustColsAll = [];
     const adjustColsByTerminal = new Map();
-    const pairSource = refundMatches.length > 0
-      ? refundMatches
-      : unmatchedRefunds.map((refund) => ({ refund, original: null }));
+    // pairSource already includes matches + unmatched refunds for right-side display.
     const buildAdjustSumFormula = (rowNumber, cols) => {
       const validCols = Array.isArray(cols) ? cols : [];
       if (validCols.length === 0) {
@@ -4020,7 +4229,9 @@
           }
           let adjustValue = 0;
           if (field === 'GROSS_SLS') {
-            adjustValue = parseNumericAyala(original ? original.record.GROSS_SLS : 0);
+            adjustValue = original
+              ? parseNumericAyala(original.record.GROSS_SLS)
+              : (refund ? getAyalaRefundDerivedAmounts(refund.record).gross : 0);
           } else if (field === 'REFUND_AMT') {
             adjustValue = parseNumericAyala(refund ? refund.record.REFUND_AMT : 0);
           } else if (paymentAdjustmentFields.includes(field)) {
@@ -8825,8 +9036,3 @@
     buildVersionBadge.title = versionLabel;
   }
 })();
-
-
-
-
-
