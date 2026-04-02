@@ -3,6 +3,7 @@
   const views = document.querySelectorAll('.view[data-view]');
   const splashText = document.getElementById('transitionSplashText');
   const buildVersionBadge = document.getElementById('buildVersionBadge');
+  const outdatedBanner = document.getElementById('outdatedBanner');
 
   function readVersionFromAssetUrl(assetPathPart) {
     try {
@@ -40,6 +41,66 @@
     if (fromCss) return fromCss;
 
     return 'unknown';
+  }
+
+  function normalizeVersionNumber(version) {
+    if (!version) return 0;
+    const clean = String(version).replace(/[^\d.]/g, '');
+    if (!clean) return 0;
+    const [majorRaw, minorRaw] = clean.split('.');
+    const major = Number.parseInt(majorRaw || '0', 10);
+    const minor = Number.parseInt(minorRaw || '0', 10);
+    if (Number.isNaN(major)) return 0;
+    return major * 1000 + (Number.isNaN(minor) ? 0 : minor);
+  }
+
+  function pickLatestVersion(...versions) {
+    let best = '';
+    let bestScore = 0;
+    versions.forEach((version) => {
+      const score = normalizeVersionNumber(version);
+      if (score > bestScore) {
+        bestScore = score;
+        best = version;
+      }
+    });
+    return best;
+  }
+
+  function extractVersionFromHtml(html, assetPathPart) {
+    if (!html || !assetPathPart) return '';
+    const escaped = assetPathPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`${escaped}[^\"']*?v=([0-9.]+)`, 'i');
+    const match = html.match(regex);
+    return match ? match[1] : '';
+  }
+
+  async function checkForOutdatedBuild() {
+    if (!outdatedBanner) return;
+
+    const currentCss = readVersionFromAssetUrl('css/style.css');
+    const currentJs = readVersionFromAssetUrl('js/script.js');
+    const currentVersion = pickLatestVersion(currentCss, currentJs);
+    if (!currentVersion) return;
+
+    try {
+      const latestUrl = new URL(window.location.href);
+      latestUrl.searchParams.set('vercheck', Date.now().toString());
+      const response = await fetch(latestUrl.toString(), { cache: 'no-store' });
+      if (!response.ok) return;
+      const html = await response.text();
+
+      const latestCss = extractVersionFromHtml(html, 'css/style.css');
+      const latestJs = extractVersionFromHtml(html, 'js/script.js');
+      const latestVersion = pickLatestVersion(latestCss, latestJs);
+      if (!latestVersion) return;
+
+      if (normalizeVersionNumber(latestVersion) > normalizeVersionNumber(currentVersion)) {
+        outdatedBanner.hidden = false;
+      }
+    } catch (error) {
+      // Ignore network or parsing failures.
+    }
   }
 
   const checkMissingOrBtn = document.getElementById('checkMissingOrBtn');
@@ -7397,6 +7458,12 @@
     if (!ayalaResultModal || !ayalaResultText) {
       return;
     }
+    if (ayalaDiscrepancyActions) {
+      ayalaDiscrepancyActions.hidden = false;
+    }
+    if (copyAyalaReportRow) {
+      copyAyalaReportRow.hidden = false;
+    }
     const rawMessage = String(message || '').trim();
     const classifyLineTone = (line) => {
       const text = String(line || '').trim();
@@ -8511,6 +8578,8 @@
       }
       setAyalaReportTone(hasIssues);
 
+      openAyalaResultModal(totalReportText, hasIssues);
+
       if (typeof XLSX === 'undefined' && ayalaStatus) {
         ayalaStatus.hidden = false;
         ayalaStatus.textContent = 'Validation complete, but XLSX download is unavailable (XLSX library not loaded).';
@@ -9014,6 +9083,73 @@
 
   setAyalaHourlyFirstMode(false);
 
+  const edgeRunnerTargets = document.querySelectorAll('.home-copy, .tool-card, .modal-card');
+  const edgeRunnerMap = new WeakMap();
+
+  const buildEdgeRunner = (target) => {
+    if (!target || edgeRunnerMap.has(target)) return;
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.classList.add('edge-runner');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+
+    const base = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    base.classList.add('edge-base');
+
+    const runner = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    runner.classList.add('edge-runner-stroke');
+
+    svg.append(base, runner);
+    target.appendChild(svg);
+
+    const update = () => {
+      const rect = target.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+
+      if (width < 40 || height < 40) {
+        return;
+      }
+
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      svg.setAttribute('width', width);
+      svg.setAttribute('height', height);
+
+      const radiusRaw = getComputedStyle(target).borderTopLeftRadius || '0';
+      const radius = Math.max(0, parseFloat(radiusRaw) || 0);
+
+      const rectWidth = Math.max(0, width - 2);
+      const rectHeight = Math.max(0, height - 2);
+
+      [base, runner].forEach((node) => {
+        node.setAttribute('x', 1);
+        node.setAttribute('y', 1);
+        node.setAttribute('width', rectWidth);
+        node.setAttribute('height', rectHeight);
+        node.setAttribute('rx', radius);
+        node.setAttribute('ry', radius);
+      });
+
+      const pathLen = Math.max(1, runner.getTotalLength());
+      const dash = Math.max(24, pathLen * 0.08);
+      const gap = Math.max(1, pathLen - dash);
+      const total = dash + gap;
+
+      runner.setAttribute('stroke-dasharray', `${dash} ${gap}`);
+      runner.style.setProperty('--edge-dash-start', '0');
+      runner.style.setProperty('--edge-dash-end', String(-total));
+    };
+
+    update();
+    const observer = new ResizeObserver(() => update());
+    observer.observe(target);
+
+    edgeRunnerMap.set(target, { svg, observer });
+  };
+
+  edgeRunnerTargets.forEach((target) => buildEdgeRunner(target));
+
   links.forEach((link) => {
     link.addEventListener('click', (event) => {
       const viewName = link.dataset.viewLink;
@@ -9035,4 +9171,6 @@
     buildVersionBadge.textContent = versionLabel;
     buildVersionBadge.title = versionLabel;
   }
+
+  checkForOutdatedBuild();
 })();

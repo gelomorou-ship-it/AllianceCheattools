@@ -4,16 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Alliance Cheat Tools</title>
-  <link rel="icon" type="image/png" href="css/tablogo.png?v=20260317.1" />
-  <link rel="shortcut icon" href="css/tablogo.png?v=20260317.1" />
-  <link rel="stylesheet" href="css/style.css?v=20260318.1" />
+  <link rel="icon" type="image/png" href="css/black%20tab.png?v=20260403.2" />
+  <link rel="shortcut icon" href="css/black%20tab.png?v=20260403.2" />
+  <link rel="stylesheet" href="css/style.css?v=20260403.25" />
 </head>
 <body>
   <div class="site-shell">
     <header class="site-header">
       <nav class="top-nav" aria-label="Main navigation">
         <a href="#home" class="nav-brand" aria-label="Go to Home" data-view-link="home">
-          <img src="css/Alliancelogonavbar.png" alt="Alliance Cheat Tools" class="nav-brand-logo" />
+          <img src="css/tablogo%202.png" alt="Alliance Cheat Tools" class="nav-brand-logo" />
         </a>
 
         <div class="nav-links">
@@ -39,7 +39,7 @@
           </section>
 
           <img
-            src="css/Alliancecheatlogo.png"
+            src="css/Alliance%20logo%202.png"
             alt="Alliance Cheat Tools Logo"
             class="home-logo-image"
           />
@@ -424,13 +424,6 @@
           </div>
 
           <p class="analyze-status" id="ayalaStatus" hidden>Ready.</p>
-          <div class="file-actions" id="ayalaDiscrepancyActions" hidden>
-            <button type="button" class="feature-btn" id="ayalaTxnDiscrepancyBtn">Transaction Validation Result</button>
-            <button type="button" class="feature-btn" id="ayalaTotalDiscrepancyBtn">Hourly vs EOD Validation Result</button>
-          </div>
-          <div class="copy-code-row" id="copyAyalaReportRow" hidden>
-            <button type="button" class="copy-code-btn" id="downloadAyalaCheckerBtn">Download XLSX</button>
-          </div>
           <textarea id="ayalaReportOutput" class="sql-output" readonly hidden></textarea>
         </div>
       </div>
@@ -442,6 +435,13 @@
           <h3>Ayala Validation Result</h3>
           <button type="button" class="modal-close-btn" id="closeAyalaResultModal" aria-label="Close">x</button>
         </div>
+        <div class="file-actions" id="ayalaDiscrepancyActions" hidden>
+          <button type="button" class="feature-btn" id="ayalaTxnDiscrepancyBtn">Transaction Validation Result</button>
+          <button type="button" class="feature-btn" id="ayalaTotalDiscrepancyBtn">Hourly vs EOD Validation Result</button>
+        </div>
+        <div class="copy-code-row" id="copyAyalaReportRow" hidden>
+          <button type="button" class="copy-code-btn" id="downloadAyalaCheckerBtn">Download XLSX</button>
+        </div>
         <pre id="ayalaResultText" class="result-output"></pre>
         <div class="file-actions">
           <button type="button" class="feature-btn upload-btn" id="okAyalaResultBtn">OK</button>
@@ -450,9 +450,12 @@
     </div>
   </div>
   <div id="buildVersionBadge" class="build-version-badge" aria-live="polite"></div>
+  <div id="outdatedBanner" class="outdated-banner" role="status" aria-live="polite" hidden>
+    Outdated version detected. Please refresh the page.
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="js/script.js?v=20260317.3"></script>
+  <script src="js/script.js?v=20260403.12"></script>
 </body>
 </html>
