@@ -1,4 +1,61 @@
 (function () {
+  const ACCESS_KEY = 'alliance_tool_access_v2';
+  const LEGACY_KEYS = ['allianceAdminUnlocked'];
+  const siteShell = document.getElementById('siteShell');
+  const maintenanceScreen = document.getElementById('maintenanceScreen');
+  const maintenanceForm = document.getElementById('maintenanceAccessForm');
+  const maintenancePasswordInput = document.getElementById('maintenancePasswordInput');
+  const maintenanceStatus = document.getElementById('maintenanceStatus');
+
+  function clearStoredAccess() {
+    try {
+      [ACCESS_KEY, ...LEGACY_KEYS].forEach((key) => {
+        sessionStorage.removeItem(key);
+        localStorage.removeItem(key);
+      });
+    } catch (error) {
+      // Ignore browser storage restrictions.
+    }
+  }
+
+  function unlockSiteAccess() {
+    if (siteShell) siteShell.hidden = false;
+    if (maintenanceScreen) maintenanceScreen.hidden = true;
+    if (maintenancePasswordInput) maintenancePasswordInput.value = '';
+    if (maintenanceStatus) maintenanceStatus.textContent = '';
+  }
+
+  function lockSiteAccess() {
+    if (siteShell) siteShell.hidden = true;
+    if (maintenanceScreen) maintenanceScreen.hidden = false;
+    clearStoredAccess();
+  }
+
+  lockSiteAccess();
+
+  maintenanceForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const enteredPassword = (maintenancePasswordInput?.value || '').trim();
+
+    if (!enteredPassword) {
+      if (maintenanceStatus) maintenanceStatus.textContent = 'Please enter the admin password.';
+      return;
+    }
+
+    if (enteredPassword === 'AllianceAdmin2026') {
+      unlockSiteAccess();
+      return;
+    }
+
+    if (maintenanceStatus) {
+      maintenanceStatus.textContent = 'Incorrect password. Access denied.';
+    }
+    if (maintenancePasswordInput) {
+      maintenancePasswordInput.value = '';
+      maintenancePasswordInput.focus();
+    }
+  });
+
   const links = document.querySelectorAll('[data-view-link]');
   const views = document.querySelectorAll('.view[data-view]');
   const splashText = document.getElementById('transitionSplashText');

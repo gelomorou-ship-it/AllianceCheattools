@@ -6,10 +6,45 @@
   <title>Alliance Cheat Tools</title>
   <link rel="icon" type="image/png" href="css/black%20tab.png?v=20260403.2" />
   <link rel="shortcut icon" href="css/black%20tab.png?v=20260403.2" />
-  <link rel="stylesheet" href="css/style.css?v=20260403.25" />
+  <link rel="stylesheet" href="css/style.css?v=20261001.1" />
 </head>
 <body>
-  <div class="site-shell">
+  <div class="maintenance-screen" id="maintenanceScreen" aria-live="polite">
+    <div class="maintenance-card">
+      <div class="maintenance-header-row">
+        <div class="maintenance-badge"><span class="status-dot"></span> SYSTEM STATUS</div>
+      </div>
+
+      <div class="maintenance-layout">
+        <div class="maintenance-content">
+          <h1>Under Maintenance</h1>
+          <p class="maintenance-copy">This system is temporarily unavailable for public access. Only authorized admin users can continue.</p>
+
+          <form id="maintenanceAccessForm" class="maintenance-form" autocomplete="off">
+            <label for="maintenancePasswordInput" class="maintenance-label">Admin access password</label>
+            <input
+              id="maintenancePasswordInput"
+              type="password"
+              class="maintenance-input"
+              placeholder="Enter admin password"
+              aria-label="Admin access password"
+              required
+            />
+            <button type="submit" class="maintenance-submit">Access System</button>
+          </form>
+
+          <p id="maintenanceStatus" class="maintenance-status" aria-live="polite"></p>
+          <p class="maintenance-powered">Powered by Angelo Bukiron<br/>The Strongest Alliance</p>
+        </div>
+
+        <div class="maintenance-logo-panel" aria-label="Alliance logo">
+          <img src="css/Alliance%20logo%202.png" alt="Alliance Cheat Tools Logo" class="maintenance-logo" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="site-shell" id="siteShell" hidden>
     <header class="site-header">
       <nav class="top-nav" aria-label="Main navigation">
         <a href="#home" class="nav-brand" aria-label="Go to Home" data-view-link="home">
@@ -456,6 +491,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="js/script.js?v=20260403.12"></script>
+  <script src="js/script.js?v=20261001.3"></script>
 </body>
 </html>
